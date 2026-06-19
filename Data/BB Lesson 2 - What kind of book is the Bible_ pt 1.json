@@ -1,0 +1,60 @@
+[
+  {
+    "question": "Objective 1",
+    "correct": [
+      "Proving that God is the author of the Bible."
+    ]
+  },
+  {
+    "question": "Objective 2",
+    "correct": [
+      "Understanding that God always fulfills His promises."
+    ]
+  },
+  {
+    "question": "How many people recorded the Bible?",
+    "correct": [
+      "35 to 40"
+    ]
+  },
+  {
+    "question": "When was the time of Moses? Give one prophecy and fulfillment.",
+    "correct": [
+      "-3500",
+      "Ex 12: 46, 1 Cor 5:7"
+    ]
+  },
+  {
+    "question": "When was the time of David? Give one prophecy and fulfillment.",
+    "correct": [
+      "-3000",
+      "Ps 22:12-18, Jn 19:23-24"
+    ]
+  },
+  {
+    "question": "When was the time of Isaiah? Give one prophecy and fulfillment.",
+    "correct": [
+      "-2700",
+      "Is 7:14, Mt 1:18-23"
+    ]
+  },
+  {
+    "question": "When was the time of Zechariah? Give one prophecy and fulfillment.",
+    "correct": [
+      "-2500",
+      "Zech 9:9-10, Mt 21:1-5"
+    ]
+  },
+  {
+    "question": "Where does it say that the meaning of the covenant was all the same?",
+    "correct": [
+      "Lk 24:44"
+    ]
+  },
+  {
+    "question": "Where does it say God's promises always fulfill?",
+    "correct": [
+      "Num 23:19"
+    ]
+  }
+]

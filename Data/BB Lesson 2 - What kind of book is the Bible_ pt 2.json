@@ -1,0 +1,59 @@
+[
+  {
+    "question": "Objective 1",
+    "correct": [
+      "Understanding the 4 different contents of the Bible."
+    ]
+  },
+  {
+    "question": "Objective 2",
+    "correct": [
+      "Recognizing the importance of understanding prophecy correctly in order to accept its fulfillment."
+    ]
+  },
+  {
+    "question": "What are the 4 contents of the Bible? Add a verse for each.",
+    "correct": [
+      "History 1 Cor 10:11",
+      "Moral Instruction 2 Tim 3:16-17",
+      "Prophecy Jn 14:29",
+      "Fulfillment Jn 19:30, Rv 21:6"
+    ]
+  },
+  {
+    "question": "Recite 2 Tim 3:16-17",
+    "correct": [
+      "All Scripture is God-breathed and is useful for teaching, rebuking, correcting and training in righteousness, so that the man of God may be thoroughly equipped for every good work."
+    ]
+  },
+  {
+    "question": "Recite Jn 14:29",
+    "correct": [
+      "I have told you now before it happens, so that when it does happen you will believe."
+    ]
+  },
+  {
+    "question": "Where does it say that Jesus was promised through the prophets?",
+    "correct": [
+      "Rom 1:2"
+    ]
+  },
+  {
+    "question": "Where does it say that God's wisdom is a mistery that no leaders understood and that's why they killed Jesus?",
+    "correct": [
+      "1 Cor 2:6-9"
+    ]
+  },
+  {
+    "question": "Where does it say that the secod coming will be like the days of Noah?",
+    "correct": [
+      "Lk 17:26-30"
+    ]
+  },
+  {
+    "question": "Where does it say \"when the son of man comes, will he find faith on earth?\"",
+    "correct": [
+      "Lk 18:8"
+    ]
+  }
+]

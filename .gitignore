@@ -1,0 +1,12 @@
+# Build/backup artifacts
+ExamTrainer.zip
+*.zip
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local-only Claude settings (keep shared ones if you choose)
+.claude/settings.local.json

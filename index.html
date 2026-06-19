@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#059669" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111815" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="./manifest.json">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="ExamTrainer">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <title>Exam Trainer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <!-- Optional Google Drive sync libraries (no-op until configured in config.js) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://apis.google.com/js/api.js" async defer></script>
+  <script>
+    if (localStorage.getItem('theme') === 'dark')
+      document.documentElement.setAttribute('data-theme', 'dark');
+  </script>
+</head>
+<body>
+
+  <header>
+    <h1>Exam Trainer</h1>
+    <button id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
+  </header>
+
+  <nav class="tab-nav" role="tablist">
+    <button class="tab-btn active" data-tab="exams" role="tab" aria-selected="true">Exams</button>
+    <button class="tab-btn" data-tab="trainer" role="tab" aria-selected="false">Trainer</button>
+    <button class="tab-btn" data-tab="history" role="tab" aria-selected="false">History</button>
+    <button class="tab-btn" data-tab="verses" role="tab" aria-selected="false">Verses</button>
+  </nav>
+
+  <main>
+
+    <!-- ─── Tab 1: Exams ─────────────────────────────── -->
+    <section id="tab-exams" class="tab-content active" role="tabpanel">
+
+      <div class="exams-header">
+        <h2>Your Exams</h2>
+        <div class="exams-actions">
+          <button id="btn-import" class="btn btn-secondary">Import JSON</button>
+          <button id="btn-export" class="btn btn-secondary">Export</button>
+          <button id="btn-drive" class="btn btn-secondary" title="Sync with Google Drive">☁ Drive</button>
+          <button id="btn-create" class="btn btn-primary">+ Create New Exam</button>
+        </div>
+      </div>
+
+      <input type="file" id="import-file" accept=".json" multiple hidden aria-hidden="true">
+
+      <div id="import-error" class="alert alert-error hidden" role="alert" aria-live="polite"></div>
+      <div id="import-success" class="alert alert-success hidden" role="status" aria-live="polite"></div>
+
+      <div id="exam-list" class="exam-list"></div>
+
+      <div id="no-exams" class="empty-state hidden">
+        <div class="empty-icon">📋</div>
+        <p>No exams yet. Import a JSON file or create a new exam to get started.</p>
+      </div>
+
+    </section>
+
+    <!-- ─── Tab 2: Trainer ──────────────────────────── -->
+    <section id="tab-trainer" class="tab-content" role="tabpanel">
+
+      <div id="trainer-no-exam" class="empty-state">
+        <div class="empty-icon">🎯</div>
+        <p>No exam selected. Go to the <strong>Exams</strong> tab and set an exam as active.</p>
+      </div>
+
+      <div id="trainer-content" class="hidden">
+
+        <div class="trainer-header">
+          <h2 id="trainer-exam-name"></h2>
+          <div class="mode-toggle" role="group" aria-label="Exam mode">
+            <button id="mode-full" class="mode-btn active">Full Exam</button>
+            <button id="mode-weak" class="mode-btn">Weak Areas Only</button>
+            <button id="mode-custom" class="mode-btn">Custom</button>
+          </div>
+        </div>
+
+        <!-- Custom question picker (shown in Custom mode) -->
+        <div id="question-picker" class="question-picker hidden">
+          <div class="picker-header">
+            <span class="picker-title">Select questions to practise</span>
+            <span class="picker-count" id="picker-count">0 selected</span>
+          </div>
+          <div id="picker-grid" class="picker-grid"></div>
+          <div class="picker-actions">
+            <button id="btn-pick-all" class="btn btn-ghost">Select All</button>
+            <button id="btn-pick-none" class="btn btn-ghost">Clear</button>
+            <button id="btn-pick-start" class="btn btn-primary">Start Session</button>
+          </div>
+        </div>
+
+        <!-- Results panel — slides in above questions after submit -->
+        <div id="results-panel" class="results-panel hidden" role="region" aria-label="Results">
+          <div class="results-score-block">
+            <div class="results-score" id="results-score-display" aria-live="polite"></div>
+            <div class="results-percent-bar-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+              <div class="results-percent-bar" id="results-percent-bar"></div>
+            </div>
+            <div class="results-percent-label" id="results-percent-label"></div>
+          </div>
+
+          <div id="needs-work-section" class="needs-work hidden">
+            <h3>Needs More Work</h3>
+            <ul id="needs-work-list"></ul>
+          </div>
+
+          <div class="results-actions">
+            <button id="btn-retry-all" class="btn btn-primary">Retry All</button>
+            <button id="btn-retry-weak" class="btn btn-secondary">Retry Weak Areas</button>
+          </div>
+        </div>
+
+        <!-- Question cards rendered here -->
+        <div id="question-list" class="question-list"></div>
+
+        <!-- Fixed bottom submit bar -->
+        <div class="bottom-bar">
+          <button id="btn-submit" class="btn btn-primary btn-large">Submit</button>
+          <button id="btn-submit-mark" class="btn btn-secondary btn-large">Submit &amp; Mark</button>
+        </div>
+
+      </div>
+
+      <!-- ─── Self-mark review view ─────────────────── -->
+      <div id="self-mark-view" class="self-mark-view hidden">
+        <div class="self-mark-topbar">
+          <div>
+            <h2 class="self-mark-title">Self-Mark</h2>
+            <p class="self-mark-subtitle">Compare your answers, then mark each one correct or incorrect.</p>
+          </div>
+          <div class="self-mark-live-score">
+            <div class="self-mark-score-label">Score</div>
+            <div class="self-mark-score-val">
+              <span id="self-mark-score-num">0</span><span class="self-mark-score-sep"> / </span><span id="self-mark-score-total">0</span>
+            </div>
+          </div>
+        </div>
+        <div class="self-mark-grid" id="self-mark-grid">
+          <div class="smg-col-header">Your Answers</div>
+          <div class="smg-col-header">Correct Answers</div>
+        </div>
+      </div>
+
+      <!-- Self-mark fixed bottom bar (position:fixed, shown only in self-mark mode) -->
+      <div class="bottom-bar hidden" id="self-mark-bottom-bar">
+        <button id="btn-self-mark-cancel" class="btn btn-ghost btn-large">Cancel</button>
+        <button id="btn-self-mark-finish" class="btn btn-primary btn-large">Finish &amp; See Results</button>
+      </div>
+
+    </section>
+
+    <!-- ─── Tab 3: History ──────────────────────────── -->
+    <section id="tab-history" class="tab-content" role="tabpanel">
+
+      <div id="history-no-exam" class="empty-state">
+        <div class="empty-icon">📈</div>
+        <p>No exam selected. Go to the <strong>Exams</strong> tab and set an exam as active.</p>
+      </div>
+
+      <div id="history-no-attempts" class="empty-state hidden">
+        <div class="empty-icon">🕓</div>
+        <h2 id="history-exam-name-empty" class="empty-exam-name"></h2>
+        <p>No attempts yet. Complete the exam in the <strong>Trainer</strong> tab to see your history here.</p>
+      </div>
+
+      <div id="history-content" class="hidden">
+
+        <h2 id="history-exam-name" class="history-heading"></h2>
+
+        <!-- Stats strip -->
+        <div class="stats-strip" id="stats-strip">
+          <div class="stat-card">
+            <div class="stat-value" id="stat-attempts">—</div>
+            <div class="stat-label">Total Attempts</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-best">—</div>
+            <div class="stat-label">Best Score</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-avg">—</div>
+            <div class="stat-label">Average Score</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value stat-value-sm" id="stat-missed">—</div>
+            <div class="stat-label">Most Missed</div>
+          </div>
+        </div>
+
+        <!-- Progress chart -->
+        <div class="chart-section">
+          <h3>Score Progress</h3>
+          <canvas id="progress-chart" height="250" aria-label="Score progress chart" role="img"></canvas>
+        </div>
+
+        <!-- Attempt list -->
+        <div id="attempt-list" class="attempt-list"></div>
+
+        <div class="history-footer">
+          <button id="btn-clear-history" class="btn btn-danger-ghost">Clear History</button>
+        </div>
+
+      </div>
+
+    </section>
+
+    <!-- ─── Tab 4: Verses ─────────────────────────────── -->
+    <section id="tab-verses" class="tab-content" role="tabpanel">
+
+      <!-- Verse list view -->
+      <div id="verse-list-view">
+        <div class="exams-header">
+          <h2>Your Verses</h2>
+          <button id="btn-add-verse" class="btn btn-primary">+ Add Verse</button>
+        </div>
+
+        <div id="verse-list" class="exam-list"></div>
+
+        <div id="no-verses" class="empty-state hidden">
+          <div class="empty-icon">&#x1F4D6;</div>
+          <p>No verses yet. Add a verse to start memorizing.</p>
+        </div>
+      </div>
+
+      <!-- Verse selection view (multi-verse entries) -->
+      <div id="verse-select-view" class="hidden">
+        <div class="verse-practice-header">
+          <button id="btn-verse-select-back" class="btn btn-ghost">&larr; Back</button>
+          <h2 id="verse-select-title"></h2>
+        </div>
+        <p class="verse-select-hint">Pick a single verse, or check several and practice them in a row.</p>
+        <div class="verse-select-toolbar">
+          <label class="export-check-label">
+            <input type="checkbox" id="verse-select-all" checked>
+            <span>Select all</span>
+          </label>
+          <button id="btn-verse-practice-selected" class="btn btn-primary btn-sm">Practice selected</button>
+        </div>
+        <div id="verse-select-list" class="verse-select-list"></div>
+      </div>
+
+      <!-- Practice view (hidden by default) -->
+      <div id="verse-practice-view" class="hidden">
+        <div class="verse-practice-header">
+          <button id="btn-verse-back" class="btn btn-ghost">&larr; Back</button>
+          <div class="verse-practice-heading">
+            <h2 id="verse-practice-title"></h2>
+            <span id="verse-practice-sub" class="verse-practice-sub hidden"></span>
+          </div>
+        </div>
+
+        <!-- Verse navigation (multi-verse sessions) -->
+        <div id="verse-nav" class="verse-nav hidden">
+          <button id="btn-verse-prev" class="btn btn-ghost btn-sm">&larr; Prev verse</button>
+          <span id="verse-nav-status" class="verse-nav-status"></span>
+          <button id="btn-verse-next" class="btn btn-ghost btn-sm">Next verse &rarr;</button>
+        </div>
+
+        <!-- Difficulty level selector -->
+        <div class="verse-level-bar">
+          <div class="verse-level-pills" role="group" aria-label="Difficulty level">
+            <button class="verse-level-pill active" data-level="1">1 &middot; Follow along</button>
+            <button class="verse-level-pill" data-level="2">2 &middot; Blanks</button>
+            <button class="verse-level-pill" data-level="3">3 &middot; From memory</button>
+          </div>
+          <p id="verse-level-hint" class="verse-level-hint"></p>
+        </div>
+
+        <!-- Reference hint (collapsed by default) -->
+        <details class="verse-ref-details">
+          <summary>Show reference</summary>
+          <div id="verse-ref-text" class="verse-ref-text"></div>
+        </details>
+
+        <!-- First-letter typing practice -->
+        <div id="verse-type-display" class="verse-type-display" tabindex="0"></div>
+        <input id="verse-type-input" class="verse-type-input" type="text"
+               autocomplete="off" autocapitalize="none" autocorrect="off"
+               spellcheck="false" inputmode="text"
+               placeholder="Type the first letter of each word&hellip;"
+               aria-label="Type the first letter of each word">
+        <div id="verse-type-progress" class="verse-type-progress" aria-live="polite"></div>
+
+        <div class="verse-type-actions">
+          <button id="btn-verse-redo" class="btn btn-secondary">&#x21BB; Redo</button>
+          <button id="btn-verse-next-level" class="btn btn-primary">Next difficulty &rarr;</button>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ─── Verse Editor Modal ───────────────────────────── -->
+  <div id="verse-editor-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="verse-editor-title">
+    <div class="modal-backdrop" id="verse-editor-backdrop"></div>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="verse-editor-title">Add Verse</h2>
+        <button id="verse-editor-close" class="btn-icon" aria-label="Close editor">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div id="verse-ed-list" class="editor-questions"></div>
+        <button id="btn-add-verse-row" type="button" class="btn btn-secondary">+ Add Verse</button>
+        <div id="verse-editor-alert" class="alert alert-error hidden" role="alert" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-verse" class="btn btn-primary">Save Verse</button>
+        <button id="btn-cancel-verse" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Exam Editor Modal ──────────────────────────── -->
+  <div id="editor-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+    <div class="modal-backdrop" id="editor-backdrop"></div>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="editor-title">Create New Exam</h2>
+        <button id="editor-close" class="btn-icon" aria-label="Close editor">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="editor-name">Exam Name</label>
+          <input type="text" id="editor-name" class="input" placeholder="e.g. Biology Chapter 3" autocomplete="off">
+        </div>
+        <div id="editor-alert" class="alert alert-error hidden" role="alert" aria-live="polite"></div>
+        <div id="editor-questions" class="editor-questions"></div>
+        <div class="editor-add-btn-row">
+          <button id="btn-add-question" class="btn btn-secondary">+ Add Question</button>
+          <button id="btn-add-fill-blank" class="btn btn-secondary">+ Add Fill in the Blanks</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-exam" class="btn btn-primary">Save Exam</button>
+        <button id="btn-cancel-editor" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Export Modal ────────────────────────────────── -->
+  <div id="export-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="export-title">
+    <div class="modal-backdrop" id="export-backdrop"></div>
+    <div class="modal-panel modal-panel-sm">
+      <div class="modal-header">
+        <h2 id="export-title">Export Exams</h2>
+        <button id="export-close" class="btn-icon" aria-label="Close export">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-folder-row">
+          <div class="export-folder-info">
+            <span class="export-folder-label">Destination</span>
+            <span id="export-folder-name" class="export-folder-name">Downloads folder (default)</span>
+          </div>
+          <button type="button" id="btn-choose-folder" class="btn btn-secondary btn-sm">Choose folder&hellip;</button>
+        </div>
+        <div class="export-select-all-row">
+          <label class="export-check-label">
+            <input type="checkbox" id="export-select-all">
+            <span>Select all</span>
+          </label>
+          <span id="export-selected-count" class="export-count">0 selected</span>
+        </div>
+        <div id="export-exam-list" class="export-exam-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-do-export" class="btn btn-primary" disabled>Export Selected</button>
+        <button id="btn-cancel-export" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Google Drive Sync Modal ────────────────────── -->
+  <div id="drive-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="drive-title">
+    <div class="modal-backdrop" id="drive-backdrop"></div>
+    <div class="modal-panel modal-panel-sm">
+      <div class="modal-header">
+        <h2 id="drive-title">Google Drive Sync</h2>
+        <button id="drive-close" class="btn-icon" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <p class="drive-intro">
+          Back up <strong>all</strong> your exams, attempt history and verses to a single file in
+          your Google Drive, and restore them on any device. Manual JSON import/export still works
+          offline.
+        </p>
+
+        <div class="drive-file-row">
+          <div class="drive-file-info">
+            <span class="drive-file-label">Linked file</span>
+            <span id="drive-file-name" class="drive-file-name">No file linked</span>
+            <span id="drive-sync-state" class="drive-sync-state"></span>
+          </div>
+        </div>
+
+        <div id="drive-status" class="drive-status" role="status" aria-live="polite"></div>
+
+        <div class="drive-actions">
+          <button id="btn-drive-signin" class="btn btn-secondary">Sign in to Google</button>
+          <button id="btn-drive-backup" class="btn btn-primary">Back up to Drive</button>
+          <button id="btn-drive-restore" class="btn btn-primary">Restore from Drive</button>
+          <button id="btn-drive-choose" class="btn btn-ghost">Choose a different file…</button>
+          <button id="btn-drive-unlink" class="btn btn-ghost">Unlink file</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-drive-cancel" class="btn btn-ghost">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Confirm Dialog Modal ───────────────────────── -->
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+    <div class="modal-backdrop" id="confirm-backdrop"></div>
+    <div class="modal-panel modal-panel-sm">
+      <div class="modal-header">
+        <h2 id="confirm-title">Confirm</h2>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-message"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-confirm-yes" class="btn btn-danger">Delete</button>
+        <button id="btn-confirm-no" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js" defer></script>
+  <script src="./config.js" defer></script>
+  <script src="./drive-sync.js" defer></script>
+</body>
+</html>
