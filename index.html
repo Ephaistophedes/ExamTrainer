@@ -223,8 +223,17 @@
       <div id="verse-list-view">
         <div class="exams-header">
           <h2>Your Verses</h2>
-          <button id="btn-add-verse" class="btn btn-primary">+ Add Verse</button>
+          <div class="exams-actions">
+            <button id="btn-verse-import" class="btn btn-secondary">Import JSON</button>
+            <button id="btn-verse-export" class="btn btn-secondary">Export</button>
+            <button id="btn-add-verse" class="btn btn-primary">+ Add Verse</button>
+          </div>
         </div>
+
+        <input type="file" id="verse-import-file" accept=".json" multiple hidden aria-hidden="true">
+
+        <div id="verse-import-error" class="alert alert-error hidden" role="alert" aria-live="polite"></div>
+        <div id="verse-import-success" class="alert alert-success hidden" role="status" aria-live="polite"></div>
 
         <div id="verse-list" class="exam-list"></div>
 
@@ -378,6 +387,38 @@
       <div class="modal-footer">
         <button id="btn-do-export" class="btn btn-primary" disabled>Export Selected</button>
         <button id="btn-cancel-export" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Verse Export Modal ──────────────────────────── -->
+  <div id="verse-export-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="verse-export-title">
+    <div class="modal-backdrop" id="verse-export-backdrop"></div>
+    <div class="modal-panel modal-panel-sm">
+      <div class="modal-header">
+        <h2 id="verse-export-title">Export Verses</h2>
+        <button id="verse-export-close" class="btn-icon" aria-label="Close export">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-folder-row">
+          <div class="export-folder-info">
+            <span class="export-folder-label">Destination</span>
+            <span id="verse-export-folder-name" class="export-folder-name">Downloads folder (default)</span>
+          </div>
+          <button type="button" id="btn-verse-choose-folder" class="btn btn-secondary btn-sm">Choose folder&hellip;</button>
+        </div>
+        <div class="export-select-all-row">
+          <label class="export-check-label">
+            <input type="checkbox" id="verse-export-select-all">
+            <span>Select all</span>
+          </label>
+          <span id="verse-export-selected-count" class="export-count">0 selected</span>
+        </div>
+        <div id="verse-export-list" class="export-exam-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-verse-do-export" class="btn btn-primary" disabled>Export Selected</button>
+        <button id="btn-verse-cancel-export" class="btn btn-ghost">Cancel</button>
       </div>
     </div>
   </div>

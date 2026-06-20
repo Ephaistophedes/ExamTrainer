@@ -2341,6 +2341,269 @@ $('verse-list').addEventListener('click', function (e) {
   }
 });
 
+/* ═══════════════════════════════════════════════════════
+   VERSE IMPORT / EXPORT  (mirrors the exam JSON system)
+   A file is an array of { ref?, text } items → one verse entry.
+   ═══════════════════════════════════════════════════════ */
+
+$('btn-verse-import').addEventListener('click', function () {
+  $('verse-import-file').click();
+});
+
+$('verse-import-file').addEventListener('change', function (e) {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+
+  const verses   = loadVerses();
+  const errors   = [];
+  let   imported = 0;
+  let   done     = 0;
+
+  files.forEach(function (file) {
+    const reader = new FileReader();
+    reader.onload = function (ev) {
+      try {
+        const raw    = JSON.parse(ev.target.result);
+        const result = validateVerseImport(raw);
+
+        if (!result.ok) {
+          errors.push('"' + file.name + '": ' + result.error);
+        } else {
+          verses.push({
+            id:      generateVerseId(),
+            title:   importVerseTitle(result.items, file.name),
+            verses:  result.items,
+            created: new Date().toISOString(),
+          });
+          imported++;
+        }
+      } catch {
+        errors.push('"' + file.name + '": could not parse — make sure it is valid JSON.');
+      }
+
+      if (++done === files.length) {
+        saveVerses(verses);
+        renderVerseList();
+
+        if (errors.length) {
+          showAlert('verse-import-error', errors.join(' | '));
+        } else {
+          hideAlert('verse-import-error');
+        }
+
+        if (imported > 0) {
+          showAlert('verse-import-success',
+            'Imported ' + pluralize(imported, 'verse') + '.' +
+            (errors.length ? ' ' + pluralize(errors.length, 'file') + ' had errors.' : ''));
+        } else {
+          hideAlert('verse-import-success');
+        }
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  e.target.value = '';
+});
+
+function validateVerseImport(data) {
+  // Accept a single { ref?, text } object as a one-item file too.
+  const arr = Array.isArray(data) ? data : [data];
+
+  if (arr.length === 0) {
+    return { ok: false, error: 'The file is empty.' };
+  }
+
+  const items = [];
+  for (let i = 0; i < arr.length; i++) {
+    let entry = arr[i];
+    const label = 'Item ' + (i + 1);
+
+    // A bare string is treated as verse text with no reference.
+    if (typeof entry === 'string') entry = { text: entry };
+
+    if (typeof entry !== 'object' || entry === null) {
+      return { ok: false, error: label + ' is not an object.' };
+    }
+    if (typeof entry.text !== 'string' || !entry.text.trim()) {
+      return { ok: false, error: label + ' is missing a "text" string.' };
+    }
+    if (entry.ref != null && typeof entry.ref !== 'string') {
+      return { ok: false, error: label + ', "ref" must be a string.' };
+    }
+
+    items.push({ ref: (entry.ref || '').trim(), text: entry.text.trim() });
+  }
+
+  return { ok: true, items: items };
+}
+
+/** Title for an imported entry: its references, else the file name, else a number. */
+function importVerseTitle(items, fileName) {
+  const refs = items.map(function (it) { return it.ref; }).filter(Boolean);
+  if (refs.length) return refs.join(', ');
+  const fromName = (fileName || '').replace(/\.json$/i, '').replace(/[-_]/g, ' ').trim();
+  if (fromName) return fromName;
+  return 'Verse ' + nextVerseNumber();
+}
+
+/* ─── Verse Export ──────────────────────────────────── */
+
+$('btn-verse-export').addEventListener('click', openVerseExportModal);
+$('verse-export-close').addEventListener('click', closeVerseExportModal);
+$('btn-verse-cancel-export').addEventListener('click', closeVerseExportModal);
+$('verse-export-backdrop').addEventListener('click', closeVerseExportModal);
+
+let verseExportFolderHandle = null;
+
+if (!supportsDirectoryPicker) {
+  $('btn-verse-choose-folder').disabled = true;
+  $('btn-verse-choose-folder').title = 'Your browser does not support choosing a folder. Files will be saved to the default Downloads folder.';
+}
+
+$('btn-verse-choose-folder').addEventListener('click', async function () {
+  if (!supportsDirectoryPicker) return;
+  try {
+    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    verseExportFolderHandle = handle;
+    const nameEl = $('verse-export-folder-name');
+    nameEl.textContent = handle.name;
+    nameEl.classList.add('is-custom');
+  } catch (err) {
+    if (err && err.name !== 'AbortError') console.error(err);
+  }
+});
+
+function resetVerseExportFolder() {
+  verseExportFolderHandle = null;
+  const nameEl = $('verse-export-folder-name');
+  nameEl.textContent = 'Downloads folder (default)';
+  nameEl.classList.remove('is-custom');
+}
+
+function openVerseExportModal() {
+  const verses = loadVerses();
+  const list   = $('verse-export-list');
+  list.innerHTML = '';
+
+  resetVerseExportFolder();
+
+  if (verses.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:0.9rem;">No verses to export.</p>';
+    $('btn-verse-do-export').disabled = true;
+    $('verse-export-select-all').checked = false;
+    $('verse-export-selected-count').textContent = '0 selected';
+    $('verse-export-modal').classList.remove('hidden');
+    return;
+  }
+
+  verses.forEach(function (v) {
+    const item = document.createElement('label');
+    item.className = 'export-exam-item';
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = v.id;
+    cb.addEventListener('change', updateVerseExportState);
+
+    const items = normalizeVerseEntry(v);
+    const info = document.createElement('div');
+    info.className = 'export-exam-item-info';
+    info.innerHTML =
+      '<div class="export-exam-item-name">' + esc(v.title) + '</div>' +
+      '<div class="export-exam-item-meta">' + pluralize(items.length, 'verse') + '</div>';
+
+    item.appendChild(cb);
+    item.appendChild(info);
+    list.appendChild(item);
+  });
+
+  $('verse-export-select-all').checked = false;
+  updateVerseExportState();
+  $('verse-export-modal').classList.remove('hidden');
+}
+
+function closeVerseExportModal() {
+  $('verse-export-modal').classList.add('hidden');
+}
+
+function updateVerseExportState() {
+  const checkboxes = $('verse-export-list').querySelectorAll('input[type="checkbox"]');
+  let checked = 0;
+  checkboxes.forEach(function (cb) {
+    cb.closest('.export-exam-item').classList.toggle('selected', cb.checked);
+    if (cb.checked) checked++;
+  });
+
+  $('verse-export-selected-count').textContent = checked + ' selected';
+  $('btn-verse-do-export').disabled = checked === 0;
+
+  const allChecked = checkboxes.length > 0 && checked === checkboxes.length;
+  const someChecked = checked > 0 && checked < checkboxes.length;
+  const selectAll = $('verse-export-select-all');
+  selectAll.checked = allChecked;
+  selectAll.indeterminate = someChecked;
+}
+
+$('verse-export-select-all').addEventListener('change', function () {
+  const checkboxes = $('verse-export-list').querySelectorAll('input[type="checkbox"]');
+  checkboxes.forEach(function (cb) { cb.checked = $('verse-export-select-all').checked; });
+  updateVerseExportState();
+});
+
+/** Build the export payload for one verse entry: [{ ref?, text }]. */
+function verseExportPayload(v) {
+  return normalizeVerseEntry(v).map(function (it) {
+    return it.ref ? { ref: it.ref, text: it.text } : { text: it.text };
+  });
+}
+
+$('btn-verse-do-export').addEventListener('click', async function () {
+  const verses     = loadVerses();
+  const checkboxes = $('verse-export-list').querySelectorAll('input[type="checkbox"]:checked');
+  const selectedIds = Array.from(checkboxes).map(function (cb) { return cb.value; });
+  const btn = $('btn-verse-do-export');
+
+  const selected = selectedIds
+    .map(function (id) { return verses.find(function (v) { return v.id === id; }); })
+    .filter(Boolean);
+
+  if (verseExportFolderHandle) {
+    btn.disabled = true;
+    try {
+      for (const v of selected) {
+        const payload = verseExportPayload(v);
+        const fileName = v.title.replace(/[<>:"/\\|?*]/g, '_') + '.json';
+        const fileHandle = await verseExportFolderHandle.getFileHandle(fileName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(JSON.stringify(payload, null, 2));
+        await writable.close();
+      }
+    } catch (err) {
+      console.error('Export to folder failed:', err);
+      alert('Could not write to the chosen folder: ' + (err && err.message ? err.message : err));
+      btn.disabled = false;
+      return;
+    }
+    btn.disabled = false;
+  } else {
+    selected.forEach(function (v) {
+      const payload = verseExportPayload(v);
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = v.title.replace(/[<>:"/\\|?*]/g, '_') + '.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  closeVerseExportModal();
+});
+
 /* ─── Verse Editor Modal ───────────────────────────── */
 
 let _editingVerseId = null;
