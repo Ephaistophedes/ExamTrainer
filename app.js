@@ -1140,6 +1140,8 @@ let trainerMode       = 'full';
 let currentQuestions   = [];
 let examSubmitted      = false;
 let customSelectedIds  = new Set();
+let weakPartsOnly      = false;   // weak mode: drill only previously-missed sub-parts
+let activeParts        = {};      // qid -> [original part indices] to practise this session
 
 // Self-mark state
 let selfMarkResults       = {};
@@ -1189,11 +1191,19 @@ $('mode-full').addEventListener('click', function ()   { switchMode('full'); });
 $('mode-weak').addEventListener('click', function ()   { switchMode('weak'); });
 $('mode-custom').addEventListener('click', function () { switchMode('custom'); });
 
+$('weak-parts-check').addEventListener('change', function () {
+  weakPartsOnly = this.checked;
+  if (trainerMode === 'weak') startTrainer();
+});
+
 function switchMode(mode) {
   trainerMode = mode;
   $('mode-full').classList.toggle('active', mode === 'full');
   $('mode-weak').classList.toggle('active', mode === 'weak');
   $('mode-custom').classList.toggle('active', mode === 'custom');
+
+  // The "sub-questions only" option is only meaningful when reviewing weak areas.
+  $('weak-parts-toggle').classList.toggle('hidden', mode !== 'weak');
 
   if (mode === 'custom') {
     const exam = getActiveExam();
@@ -1232,6 +1242,18 @@ function startTrainer() {
   } else {
     currentQuestions = [...exam.questions];
     clearInlineNotice();
+  }
+
+  computeActiveParts(exam);
+
+  // Tell the user when we've trimmed multi-part questions down to the misses.
+  if (trainerMode === 'weak' && weakPartsOnly) {
+    const trimmed = currentQuestions.some(function (q) {
+      return (activeParts[q.id] || q.correct).length < q.correct.length;
+    });
+    if (trimmed) {
+      showInlineNotice('Drilling only the sub-questions you’ve missed before.');
+    }
   }
 
   renderQuestions(currentQuestions);
@@ -1457,7 +1479,8 @@ function renderQuestions(questions) {
         '<div class="fib-feedbacks">' + feedbackHtml + '</div>' +
         '<div class="question-partial-label" id="partial-' + q.id + '" hidden></div>';
     } else {
-      const partsHtml = q.correct.map(function (_, pi) {
+      const parts = activeParts[q.id] || q.correct.map(function (_, pi) { return pi; });
+      const partsHtml = parts.map(function (pi) {
         return (
           '<div class="answer-part-row">' +
             '<span class="answer-part-label">' + (pi + 1) + '.</span>' +
@@ -1520,7 +1543,11 @@ function applyFeedbackToCard(card, q, record) {
     inp.disabled = true;
   });
 
-  record.partResults.forEach(function (isCorrect, pi) {
+  // partResults is aligned to the parts actually practised; map back to the
+  // original part index so feedback lands on the right input.
+  const parts = record.partIndices || q.correct.map(function (_, pi) { return pi; });
+  record.partResults.forEach(function (isCorrect, i) {
+    const pi = parts[i];
     const fb = $('fb-' + q.id + '-' + pi);
     if (!fb) return;
     if (isCorrect) {
@@ -1566,15 +1593,19 @@ function gradeExam() {
   const answerRecords = [];
 
   currentQuestions.forEach(function (q) {
-    const card   = $('qcard-' + q.id);
-    const inputs = card.querySelectorAll('.answer-part-input');
+    const card  = $('qcard-' + q.id);
+    const parts = activeParts[q.id] || q.correct.map(function (_, pi) { return pi; });
 
-    const userAnswers = Array.from(inputs).map(function (inp) { return inp.value.trim(); });
-    const partResults = q.correct.map(function (ans, pi) {
-      return answersMatch(userAnswers[pi] || '', ans);
+    const userAnswers = [];
+    const partResults = [];
+    parts.forEach(function (pi) {
+      const inp = card.querySelector('.answer-part-input[data-part="' + pi + '"]');
+      const val = inp ? inp.value.trim() : '';
+      userAnswers.push(val);
+      partResults.push(answersMatch(val, q.correct[pi]));
     });
     const partsCorrect = partResults.filter(Boolean).length;
-    const partsTotal   = q.correct.length;
+    const partsTotal   = parts.length;
 
     totalParts   += partsTotal;
     correctParts += partsCorrect;
@@ -1586,6 +1617,8 @@ function gradeExam() {
       partsCorrect: partsCorrect,
       partsTotal:   partsTotal,
     };
+    // Only present when practising a subset of a question's parts.
+    if (parts.length !== q.correct.length) record.partIndices = parts.slice();
     answerRecords.push(record);
 
     applyFeedbackToCard(card, q, record);
@@ -1749,6 +1782,52 @@ function getWeakQuestions(exam) {
     .sort(function (a, b) { return posById.get(a.id) - posById.get(b.id); });
 }
 
+// Which individual sub-parts (by original part index) have ever been missed,
+// per question. Used to drill only the wrong sub-questions in weak mode.
+function getWeakPartMap(exam) {
+  const history = loadHistory().filter(function (a) { return a.examId === exam.id; });
+  const map = {};
+  history.forEach(function (attempt) {
+    attempt.answers.forEach(function (a) {
+      if (!Array.isArray(a.partResults)) return;
+      a.partResults.forEach(function (ok, i) {
+        if (ok) return;
+        // Records from a focused session store the original indices separately.
+        const pi = Array.isArray(a.partIndices) ? a.partIndices[i] : i;
+        if (pi == null) return;
+        if (!map[a.id]) map[a.id] = {};
+        map[a.id][pi] = true;
+      });
+    });
+  });
+  const out = {};
+  Object.keys(map).forEach(function (id) {
+    out[id] = Object.keys(map[id]).map(Number).sort(function (x, y) { return x - y; });
+  });
+  return out;
+}
+
+// Decide which part indices to render/grade for each current question.
+// Normally every part; in weak mode with "sub-questions only" enabled, just
+// the parts that have been missed (skipped for fill-in-the-blank, which must
+// always show the whole sentence).
+function computeActiveParts(exam) {
+  activeParts = {};
+  const partMap = (trainerMode === 'weak' && weakPartsOnly) ? getWeakPartMap(exam) : null;
+
+  currentQuestions.forEach(function (q) {
+    const all = q.correct.map(function (_, pi) { return pi; });
+    if (partMap && q.type !== 'fill_blank') {
+      const missed = (partMap[q.id] || []).filter(function (pi) { return pi < q.correct.length; });
+      if (missed.length > 0 && missed.length < all.length) {
+        activeParts[q.id] = missed;
+        return;
+      }
+    }
+    activeParts[q.id] = all;
+  });
+}
+
 /* ═══════════════════════════════════════════════════════
    SELF-MARK MODE
    ═══════════════════════════════════════════════════════ */
@@ -1766,17 +1845,22 @@ function enterSelfMarkMode() {
 
   selfMarkQuestionsSnap = [...currentQuestions];
   selfMarkUserAnswers   = currentQuestions.map(function (q) {
-    const card   = $('qcard-' + q.id);
-    const inputs = card ? card.querySelectorAll('.answer-part-input') : [];
+    const card  = $('qcard-' + q.id);
+    const parts = activeParts[q.id] || q.correct.map(function (_, pi) { return pi; });
     return {
       id: q.id,
-      userAnswers: Array.from(inputs).map(function (inp) { return inp.value.trim(); }),
+      parts: parts.slice(),
+      userAnswers: parts.map(function (pi) {
+        const inp = card ? card.querySelector('.answer-part-input[data-part="' + pi + '"]') : null;
+        return inp ? inp.value.trim() : '';
+      }),
     };
   });
 
   selfMarkResults = {};
   selfMarkQuestionsSnap.forEach(function (q) {
-    q.correct.forEach(function (_, pi) {
+    const parts = activeParts[q.id] || q.correct.map(function (_, pi) { return pi; });
+    parts.forEach(function (pi) {
       selfMarkResults[q.id + '-' + pi] = null;
     });
   });
@@ -1795,20 +1879,24 @@ function renderSelfMarkView() {
   while (grid.children.length > 2) grid.removeChild(grid.lastChild);
 
   let totalParts = 0;
-  selfMarkQuestionsSnap.forEach(function (q) { totalParts += q.correct.length; });
+  selfMarkQuestionsSnap.forEach(function (q) {
+    totalParts += (activeParts[q.id] || q.correct).length;
+  });
   $('self-mark-score-total').textContent = totalParts;
   updateSelfMarkScore();
 
   selfMarkQuestionsSnap.forEach(function (q, qi) {
+    const parts     = activeParts[q.id] || q.correct.map(function (_, pi) { return pi; });
     const uRec      = selfMarkUserAnswers.find(function (a) { return a.id === q.id; });
-    const userAns   = uRec ? uRec.userAnswers : q.correct.map(function () { return ''; });
+    const userAns   = uRec ? uRec.userAnswers : parts.map(function () { return ''; });
     const multiPart = q.correct.length > 1;
 
     // Left cell: question text + user's answers
     const leftCell     = document.createElement('div');
     leftCell.className = 'smg-left';
 
-    const userAnsHtml = userAns.map(function (ans, pi) {
+    const userAnsHtml = parts.map(function (pi, i) {
+      const ans = userAns[i];
       return (
         '<div class="smg-user-ans">' +
           (multiPart ? '<span class="smg-part-num">' + (pi + 1) + '.</span>' : '') +
@@ -1826,7 +1914,8 @@ function renderSelfMarkView() {
     const rightCell     = document.createElement('div');
     rightCell.className = 'smg-right';
 
-    rightCell.innerHTML = q.correct.map(function (ans, pi) {
+    rightCell.innerHTML = parts.map(function (pi) {
+      const ans  = q.correct[pi];
       const key  = q.id + '-' + pi;
       const mark = selfMarkResults[key];
 
@@ -1907,22 +1996,25 @@ function finishSelfMark() {
 
   selfMarkQuestionsSnap.forEach(function (q) {
     const uRec        = selfMarkUserAnswers.find(function (a) { return a.id === q.id; });
-    const userAnswers = uRec ? uRec.userAnswers : q.correct.map(function () { return ''; });
-    const partResults = q.correct.map(function (_, pi) {
+    const parts       = (uRec && uRec.parts) || activeParts[q.id] || q.correct.map(function (_, pi) { return pi; });
+    const userAnswers = uRec ? uRec.userAnswers : parts.map(function () { return ''; });
+    const partResults = parts.map(function (pi) {
       return selfMarkResults[q.id + '-' + pi] === true;
     });
     const partsCorrect = partResults.filter(Boolean).length;
-    const partsTotal   = q.correct.length;
+    const partsTotal   = parts.length;
 
     totalParts   += partsTotal;
     correctParts += partsCorrect;
-    answerRecords.push({
+    const rec = {
       id:           q.id,
       userAnswers:  userAnswers,
       partResults:  partResults,
       partsCorrect: partsCorrect,
       partsTotal:   partsTotal,
-    });
+    };
+    if (parts.length !== q.correct.length) rec.partIndices = parts.slice();
+    answerRecords.push(rec);
   });
 
   const percent = totalParts > 0 ? Math.round((correctParts / totalParts) * 100) : 0;
@@ -2229,11 +2321,16 @@ function populateAttemptTable(tbody, attempt, exam) {
       resultHtml = '<span class="result-partial">' + a.partsCorrect + '/' + a.partsTotal + '</span>';
     }
 
+    // A focused session only covers some parts; show just those, aligned.
+    const correctList = Array.isArray(a.partIndices)
+      ? a.partIndices.map(function (pi) { return q.correct[pi]; })
+      : q.correct;
+
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td>' + esc(q.question) + '</td>' +
       '<td>' + a.userAnswers.map(esc).join('<br>') + '</td>' +
-      '<td>' + q.correct.map(esc).join('<br>') + '</td>' +
+      '<td>' + correctList.map(esc).join('<br>') + '</td>' +
       '<td class="result-cell">' + resultHtml + '</td>';
     tbody.appendChild(tr);
   });
