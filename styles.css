@@ -1709,8 +1709,9 @@ main {
 
   /* ── Main content ────────────────────────────────── */
 
-  /* Extra bottom padding accounts for fixed bar + gesture nav strip */
-  main { padding: 1.25rem 1rem calc(5rem + env(safe-area-inset-bottom)); }
+  /* The submit bar flows at the end of the page on phones (see .bottom-bar
+     below), so main only needs room for the gesture-nav strip. */
+  main { padding: 1.25rem 1rem calc(1.25rem + env(safe-area-inset-bottom)); }
 
   /* ── Buttons ─────────────────────────────────────── */
 
@@ -1758,11 +1759,15 @@ main {
     min-height: 44px;
   }
 
-  /* Bottom bar: equal buttons + safe area */
+  /* On phones the fixed bar covers content and gets in the way, so let it
+     sit at the end of the page in normal flow instead of pinned to the screen. */
   .bottom-bar {
+    position: static;
+    margin-top: 1.5rem;
     padding: 0.75rem 1rem;
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
     gap: 0.5rem;
+    backdrop-filter: none;
   }
 
   .bottom-bar .btn-large { flex: 1; justify-content: center; }
@@ -2378,27 +2383,6 @@ main {
   color: var(--text-muted);
 }
 
-/* Verse navigation (multi-verse session) */
-.verse-nav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-}
-.verse-nav-status {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-.verse-nav .btn[disabled] {
-  opacity: 0.4;
-  cursor: default;
-}
 
 /* Verse selection view */
 .verse-select-hint {

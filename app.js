@@ -2727,6 +2727,7 @@ function createVerseEditorRow(item, idx) {
   row.className = 'editor-q-row verse-ed-row';
   row.innerHTML =
     '<div class="editor-q-header">' +
+      '<span class="drag-handle" draggable="true" title="Drag to reorder" aria-hidden="true">⠿</span>' +
       '<span class="editor-q-label">Verse ' + (idx + 1) + '</span>' +
       '<button class="btn btn-ghost btn-remove-q btn-remove-verse" type="button" title="Remove verse">✕ Remove</button>' +
     '</div>' +
@@ -2761,6 +2762,90 @@ function renderVerseEditorRows(items) {
   list.innerHTML = '';
   items.forEach(function (item, i) { list.appendChild(createVerseEditorRow(item, i)); });
   renumberVerseRows();
+  initVerseDragAndDrop();
+}
+
+/* Drag-to-reorder verse rows (mirrors the exam question editor). */
+let _verseDragCleanup = null;
+
+function initVerseDragAndDrop() {
+  if (_verseDragCleanup) {
+    _verseDragCleanup();
+    _verseDragCleanup = null;
+  }
+
+  const container = $('verse-ed-list');
+  let dragSrc = null;
+
+  function onDragStart(e) {
+    if (!e.target.classList.contains('drag-handle')) return;
+    const row = e.target.closest('.verse-ed-row');
+    if (!row) return;
+    dragSrc = row;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onDragEnd(e) {
+    const row = e.target.closest('.verse-ed-row');
+    if (row) row.classList.remove('dragging');
+    container.querySelectorAll('.verse-ed-row').forEach(function (r) {
+      r.classList.remove('drag-over');
+    });
+    renumberVerseRows();
+    dragSrc = null;
+  }
+
+  function onDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const row = e.target.closest('.verse-ed-row');
+    if (row && row !== dragSrc) {
+      container.querySelectorAll('.verse-ed-row').forEach(function (r) {
+        r.classList.remove('drag-over');
+      });
+      row.classList.add('drag-over');
+    }
+  }
+
+  function onDragLeave(e) {
+    if (!container.contains(e.relatedTarget)) {
+      container.querySelectorAll('.verse-ed-row').forEach(function (r) {
+        r.classList.remove('drag-over');
+      });
+    }
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    const row = e.target.closest('.verse-ed-row');
+    if (row) row.classList.remove('drag-over');
+    if (!row || !dragSrc || row === dragSrc) return;
+
+    const rows   = [...container.querySelectorAll('.verse-ed-row')];
+    const srcIdx = rows.indexOf(dragSrc);
+    const tgtIdx = rows.indexOf(row);
+
+    if (srcIdx < tgtIdx) {
+      container.insertBefore(dragSrc, row.nextSibling);
+    } else {
+      container.insertBefore(dragSrc, row);
+    }
+  }
+
+  container.addEventListener('dragstart', onDragStart);
+  container.addEventListener('dragend',   onDragEnd);
+  container.addEventListener('dragover',  onDragOver);
+  container.addEventListener('dragleave', onDragLeave);
+  container.addEventListener('drop',      onDrop);
+
+  _verseDragCleanup = function () {
+    container.removeEventListener('dragstart', onDragStart);
+    container.removeEventListener('dragend',   onDragEnd);
+    container.removeEventListener('dragover',  onDragOver);
+    container.removeEventListener('dragleave', onDragLeave);
+    container.removeEventListener('drop',      onDrop);
+  };
 }
 
 $('btn-add-verse-row').addEventListener('click', function () {
@@ -2910,7 +2995,6 @@ function buildVerseModel(text) {
 
 let _verseEntry      = null; // the entry being practised (for back-nav / re-selection)
 let _verseQueue      = [];   // [{ ref, text }] selected for this session
-let _verseQueueIdx   = 0;    // index of the current verse in the queue
 let _verseFromSelect = false; // launched from the selection view?
 
 /** Entry point from the verse list. Single-verse → practice; multi → selection. */
@@ -2995,7 +3079,6 @@ $('btn-verse-select-back').addEventListener('click', function () {
 
 function beginVerseSession(queue, startIdx, fromSelect) {
   _verseQueue      = queue;
-  _verseQueueIdx   = startIdx || 0;
   _verseFromSelect = !!fromSelect;
   _verseLevel      = 1;
 
@@ -3003,47 +3086,38 @@ function beginVerseSession(queue, startIdx, fromSelect) {
   $('verse-select-view').classList.add('hidden');
   $('verse-practice-view').classList.remove('hidden');
 
-  loadVerseFromQueue();
+  loadVerseSession();
 }
 
-/** Load the current queued verse into the practice UI. */
-function loadVerseFromQueue() {
-  const item = _verseQueue[_verseQueueIdx];
-  _practiceVerse = item;
-  _verseModel = buildVerseModel(item.text);
+/**
+ * Load the whole selection into the practice UI as one continuous passage,
+ * so a chapter chunk can be drilled without paging between verses. The verse
+ * texts are joined with a blank line so each verse stays visually distinct.
+ */
+function loadVerseSession() {
+  const combinedText = _verseQueue.map(function (it) { return it.text; }).join('\n\n');
+  _practiceVerse = { text: combinedText };
+  _verseModel = buildVerseModel(combinedText);
 
-  $('verse-practice-title').textContent = _verseEntry ? _verseEntry.title : (item.ref || 'Verse');
-  $('verse-ref-text').textContent = item.text;
+  $('verse-practice-title').textContent = _verseEntry
+    ? _verseEntry.title
+    : (_verseQueue[0] && _verseQueue[0].ref) || 'Verse';
+  $('verse-ref-text').textContent = combinedText;
 
-  // Subtitle: show the verse reference / position when it adds context
-  const sub = $('verse-practice-sub');
+  // Subtitle: the reference range (or count) the session covers.
+  const refs = _verseQueue.map(function (it) { return it.ref; }).filter(Boolean);
+  const sub  = $('verse-practice-sub');
   let subText = '';
-  if (item.ref) subText = item.ref;
-  else if (_verseQueue.length > 1) subText = 'Verse ' + (_verseQueueIdx + 1);
+  if (refs.length) {
+    subText = refs.length > 1 ? refs[0] + ' – ' + refs[refs.length - 1] : refs[0];
+  } else if (_verseQueue.length > 1) {
+    subText = _verseQueue.length + ' verses';
+  }
   if (subText) { sub.textContent = subText; sub.classList.remove('hidden'); }
   else sub.classList.add('hidden');
 
-  // Verse navigation (only for multi-verse sessions)
-  const nav = $('verse-nav');
-  if (_verseQueue.length > 1) {
-    nav.classList.remove('hidden');
-    $('verse-nav-status').textContent = 'Verse ' + (_verseQueueIdx + 1) + ' of ' + _verseQueue.length;
-    $('btn-verse-prev').disabled = _verseQueueIdx === 0;
-    $('btn-verse-next').disabled = _verseQueueIdx === _verseQueue.length - 1;
-  } else {
-    nav.classList.add('hidden');
-  }
-
   setupVerseLevel();
 }
-
-$('btn-verse-prev').addEventListener('click', function () {
-  if (_verseQueueIdx > 0) { _verseQueueIdx--; loadVerseFromQueue(); }
-});
-
-$('btn-verse-next').addEventListener('click', function () {
-  if (_verseQueueIdx < _verseQueue.length - 1) { _verseQueueIdx++; loadVerseFromQueue(); }
-});
 
 $('btn-verse-back').addEventListener('click', function () {
   $('verse-practice-view').classList.add('hidden');
