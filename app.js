@@ -3236,6 +3236,11 @@ function renderVerseType() {
   });
 
   container.innerHTML = linesHtml.join('');
+
+  // Keep the word being typed in view on long passages (no-op when already visible).
+  const cur = container.querySelector('.vt-current');
+  if (cur) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
   renderVerseProgress();
 }
 

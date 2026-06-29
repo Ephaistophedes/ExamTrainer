@@ -290,13 +290,16 @@
           <div id="verse-ref-text" class="verse-ref-text"></div>
         </details>
 
-        <!-- First-letter typing practice -->
-        <div id="verse-type-display" class="verse-type-display" tabindex="0"></div>
-        <input id="verse-type-input" class="verse-type-input" type="text"
-               autocomplete="off" autocapitalize="none" autocorrect="off"
-               spellcheck="false" inputmode="text"
-               placeholder="Type the first letter of each word&hellip;"
-               aria-label="Type the first letter of each word">
+        <!-- First-letter typing practice. The input is invisible and overlaid
+             on the text, so typing highlights the words in place (and tapping
+             the text raises the keyboard on mobile). -->
+        <div class="verse-type-area">
+          <div id="verse-type-display" class="verse-type-display"></div>
+          <input id="verse-type-input" class="verse-type-input" type="text"
+                 autocomplete="off" autocapitalize="none" autocorrect="off"
+                 spellcheck="false" inputmode="text"
+                 aria-label="Type the first letter of each word">
+        </div>
         <div id="verse-type-progress" class="verse-type-progress" aria-live="polite"></div>
 
         <div class="verse-type-actions">

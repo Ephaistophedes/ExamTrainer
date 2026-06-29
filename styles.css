@@ -2292,7 +2292,10 @@ main {
   color: var(--text-muted);
 }
 
-/* Verse display */
+/* Verse display + overlaid invisible input */
+.verse-type-area {
+  position: relative;
+}
 .verse-type-display {
   padding: 1rem 1.1rem;
   border: 1px solid var(--border);
@@ -2303,6 +2306,12 @@ main {
   min-height: 5rem;
   cursor: text;
   outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+/* Highlight the text box while the (invisible) input has focus. */
+.verse-type-area:focus-within .verse-type-display {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-ring);
 }
 .vt-line {
   display: flex;
@@ -2335,23 +2344,25 @@ main {
   background: var(--primary-light);
 }
 
-/* Hidden keystroke-capture input */
+/* Invisible keystroke-capture input, overlaid exactly on the text so the
+   keyboard appears where the user is looking and the words highlight in place. */
 .verse-type-input {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  margin-top: 0.85rem;
-  padding: 0.7rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-body);
-  font-size: 0.95rem;
-  transition: border-color var(--transition), box-shadow var(--transition);
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px; /* >=16px stops mobile browsers zooming on focus */
+  cursor: text;
+  -webkit-tap-highlight-color: transparent;
 }
 .verse-type-input:focus {
   outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-ring);
 }
 
 .verse-type-progress {
