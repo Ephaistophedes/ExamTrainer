@@ -2996,6 +2996,7 @@ function buildVerseModel(text) {
 let _verseEntry      = null; // the entry being practised (for back-nav / re-selection)
 let _verseQueue      = [];   // [{ ref, text }] selected for this session
 let _verseFromSelect = false; // launched from the selection view?
+let _verseItemIndex  = -1;   // index of the current single verse within the entry (-1 = combined/n-a)
 
 /** Entry point from the verse list. Single-verse → practice; multi → selection. */
 function startVersePractice(verseId) {
@@ -3008,7 +3009,7 @@ function startVersePractice(verseId) {
   if (items.length > 1) {
     openVerseSelect(v, items);
   } else {
-    beginVerseSession(items, 0, false);
+    beginVerseSession(items, false, 0);
   }
 }
 
@@ -3055,18 +3056,21 @@ $('verse-select-list').addEventListener('click', function (e) {
   const btn = e.target.closest('.verse-select-one');
   if (!btn || !_verseEntry) return;
   const items = normalizeVerseEntry(_verseEntry);
-  beginVerseSession([items[Number(btn.dataset.idx)]], 0, true);
+  const idx = Number(btn.dataset.idx);
+  beginVerseSession([items[idx]], true, idx);
 });
 
 $('btn-verse-practice-selected').addEventListener('click', function () {
   if (!_verseEntry) return;
   const items = normalizeVerseEntry(_verseEntry);
-  const selected = [];
+  const idxs = [];
   $('verse-select-list').querySelectorAll('.verse-select-cb').forEach(function (cb) {
-    if (cb.checked) selected.push(items[Number(cb.dataset.idx)]);
+    if (cb.checked) idxs.push(Number(cb.dataset.idx));
   });
-  if (selected.length === 0) return;
-  beginVerseSession(selected, 0, true);
+  if (idxs.length === 0) return;
+  const selected = idxs.map(function (i) { return items[i]; });
+  // A single-verse selection can still page forward through the entry.
+  beginVerseSession(selected, true, selected.length === 1 ? idxs[0] : -1);
 });
 
 $('btn-verse-select-back').addEventListener('click', function () {
@@ -3077,9 +3081,10 @@ $('btn-verse-select-back').addEventListener('click', function () {
 
 /* ─── Practice session ─────────────────────────────── */
 
-function beginVerseSession(queue, startIdx, fromSelect) {
+function beginVerseSession(queue, fromSelect, itemIndex) {
   _verseQueue      = queue;
   _verseFromSelect = !!fromSelect;
+  _verseItemIndex  = (typeof itemIndex === 'number') ? itemIndex : -1;
   _verseLevel      = 1;
 
   $('verse-list-view').classList.add('hidden');
@@ -3116,7 +3121,19 @@ function loadVerseSession() {
   if (subText) { sub.textContent = subText; sub.classList.remove('hidden'); }
   else sub.classList.add('hidden');
 
+  updateVerseNav();
   setupVerseLevel();
+}
+
+/** Show the "Next verse" button only when a following verse exists in the entry. */
+function updateVerseNav() {
+  const btn = $('btn-verse-next-item');
+  if (!btn) return;
+  const items = _verseEntry ? normalizeVerseEntry(_verseEntry) : [];
+  const hasNext = _verseQueue.length === 1 &&
+                  _verseItemIndex >= 0 &&
+                  (_verseItemIndex + 1) < items.length;
+  btn.classList.toggle('hidden', !hasNext);
 }
 
 $('btn-verse-back').addEventListener('click', function () {
@@ -3327,6 +3344,17 @@ $('btn-verse-next-level').addEventListener('click', function () {
   if (!_practiceVerse || _verseLevel >= 3) return;
   _verseLevel++;
   setupVerseLevel();
+});
+
+// Page forward to the next verse in the entry, keeping the current difficulty.
+$('btn-verse-next-item').addEventListener('click', function () {
+  if (!_verseEntry) return;
+  const items = normalizeVerseEntry(_verseEntry);
+  const next  = _verseItemIndex + 1;
+  if (next < 0 || next >= items.length) return;
+  _verseItemIndex = next;
+  _verseQueue     = [items[next]];
+  loadVerseSession(); // preserves _verseLevel via setupVerseLevel()
 });
 
 
