@@ -2339,6 +2339,10 @@ main {
 .vt-current {
   box-shadow: inset 0 -2px 0 var(--primary);
   border-radius: 2px;
+  /* Keep the current word clear of the sticky progress bar above, and clear
+     of the on-screen keyboard below on long, scrolling passages. */
+  scroll-margin-top: var(--verse-scroll-margin, 140px);
+  scroll-margin-bottom: 30vh;
 }
 .vt-hidden.vt-current {
   background: var(--primary-light);
@@ -2365,14 +2369,44 @@ main {
   outline: none;
 }
 
+/* Sticky so position stays visible while a long passage scrolls beneath it —
+   otherwise it's only visible once the user has scrolled to the very end. */
 .verse-type-progress {
-  margin-top: 0.6rem;
+  position: sticky;
+  top: 100px; /* overridden by JS to match actual header + tab-nav height */
+  z-index: 50;
+  margin-bottom: 0.75rem;
+  padding: 0.45rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.08);
   font-size: 0.9rem;
   font-weight: 600;
   color: var(--text-muted);
 }
+.verse-type-progress-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-hover);
+  overflow: hidden;
+  margin-bottom: 0.35rem;
+}
+.verse-type-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--primary);
+  border-radius: 3px;
+  transition: width 0.15s ease;
+}
+.verse-type-progress-text {
+  display: block;
+}
 .verse-type-progress.vt-done {
   color: var(--primary);
+}
+.verse-type-progress.vt-done .verse-type-progress-fill {
+  background: var(--primary);
 }
 
 .verse-type-actions {

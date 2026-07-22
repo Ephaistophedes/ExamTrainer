@@ -290,6 +290,14 @@
           <div id="verse-ref-text" class="verse-ref-text"></div>
         </details>
 
+        <!-- Sticky so it stays visible above the passage on long, scrolling
+             practice sessions — otherwise position is invisible until the
+             very end of the text. -->
+        <div id="verse-type-progress" class="verse-type-progress" aria-live="polite">
+          <div class="verse-type-progress-bar"><div id="verse-type-progress-fill" class="verse-type-progress-fill"></div></div>
+          <span id="verse-type-progress-text" class="verse-type-progress-text"></span>
+        </div>
+
         <!-- First-letter typing practice. The input is invisible and overlaid
              on the text, so typing highlights the words in place (and tapping
              the text raises the keyboard on mobile). -->
@@ -300,7 +308,6 @@
                  spellcheck="false" inputmode="text"
                  aria-label="Type the first letter of each word">
         </div>
-        <div id="verse-type-progress" class="verse-type-progress" aria-live="polite"></div>
 
         <div class="verse-type-actions">
           <button id="btn-verse-redo" class="btn btn-secondary">&#x21BB; Redo</button>

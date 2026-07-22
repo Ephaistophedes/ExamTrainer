@@ -249,11 +249,23 @@ tabBtns.forEach(function (btn) {
   });
 });
 
-// Keep tab-nav sticky top aligned to actual header height (handles any screen size / font scaling)
+// Keep sticky bars aligned to actual header/tab-nav height (handles any screen size / font scaling).
+// The verse progress bar stacks below both so it stays visible while a long passage scrolls beneath it.
 function updateTabNavTop() {
   const h = document.querySelector('header');
   const nav = document.querySelector('.tab-nav');
   if (h && nav) nav.style.top = h.offsetHeight + 'px';
+
+  const verseProgress = document.getElementById('verse-type-progress');
+  if (h && nav && verseProgress) {
+    const stackTop = h.offsetHeight + nav.offsetHeight;
+    verseProgress.style.top = stackTop + 'px';
+    // Lets scrollIntoView('nearest') clear the sticky header/tab-nav/progress
+    // stack instead of tucking the current word directly behind it.
+    document.documentElement.style.setProperty(
+      '--verse-scroll-margin', (stackTop + verseProgress.offsetHeight + 12) + 'px'
+    );
+  }
 }
 updateTabNavTop();
 window.addEventListener('resize', updateTabNavTop);
@@ -3092,6 +3104,7 @@ function beginVerseSession(queue, fromSelect, itemIndex) {
   $('verse-practice-view').classList.remove('hidden');
 
   loadVerseSession();
+  updateTabNavTop(); // progress bar just became visible — recompute its sticky offset
 }
 
 /**
@@ -3264,14 +3277,19 @@ function renderVerseType() {
 function renderVerseProgress() {
   const total    = _verseModel.count;
   const progress = $('verse-type-progress');
+  const fill     = $('verse-type-progress-fill');
+  const text     = $('verse-type-progress-text');
+
+  const donePct = total ? Math.round(Math.min(_verseCursor, total) / total * 100) : 0;
+  fill.style.width = donePct + '%';
 
   if (_verseCursor >= total) {
     const correct = _verseStatus.filter(function (s) { return s === 'correct'; }).length;
     const pct = total ? Math.round(correct / total * 100) : 0;
-    progress.textContent = 'Done!  ' + correct + ' / ' + total + ' correct (' + pct + '%)';
+    text.textContent = 'Done!  ' + correct + ' / ' + total + ' correct (' + pct + '%)';
     progress.classList.add('vt-done');
   } else {
-    progress.textContent = 'Word ' + (_verseCursor + 1) + ' of ' + total;
+    text.textContent = 'Word ' + (_verseCursor + 1) + ' of ' + total;
     progress.classList.remove('vt-done');
   }
 }
