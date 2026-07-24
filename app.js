@@ -3138,15 +3138,17 @@ function loadVerseSession() {
   setupVerseLevel();
 }
 
-/** Show the "Next verse" button only when a following verse exists in the entry. */
+/** Show the "Previous/Next verse" buttons only when paging a single verse within an entry. */
 function updateVerseNav() {
-  const btn = $('btn-verse-next-item');
-  if (!btn) return;
+  const nextBtn = $('btn-verse-next-item');
+  const prevBtn = $('btn-verse-prev-item');
+  if (!nextBtn || !prevBtn) return;
   const items = _verseEntry ? normalizeVerseEntry(_verseEntry) : [];
-  const hasNext = _verseQueue.length === 1 &&
-                  _verseItemIndex >= 0 &&
-                  (_verseItemIndex + 1) < items.length;
-  btn.classList.toggle('hidden', !hasNext);
+  const paging = _verseQueue.length === 1 && _verseItemIndex >= 0;
+  const hasNext = paging && (_verseItemIndex + 1) < items.length;
+  const hasPrev = paging && (_verseItemIndex - 1) >= 0;
+  nextBtn.classList.toggle('hidden', !hasNext);
+  prevBtn.classList.toggle('hidden', !hasPrev);
 }
 
 $('btn-verse-back').addEventListener('click', function () {
@@ -3372,6 +3374,17 @@ $('btn-verse-next-item').addEventListener('click', function () {
   if (next < 0 || next >= items.length) return;
   _verseItemIndex = next;
   _verseQueue     = [items[next]];
+  loadVerseSession(); // preserves _verseLevel via setupVerseLevel()
+});
+
+// Page back to the previous verse in the entry, keeping the current difficulty.
+$('btn-verse-prev-item').addEventListener('click', function () {
+  if (!_verseEntry) return;
+  const items = normalizeVerseEntry(_verseEntry);
+  const prev  = _verseItemIndex - 1;
+  if (prev < 0 || prev >= items.length) return;
+  _verseItemIndex = prev;
+  _verseQueue     = [items[prev]];
   loadVerseSession(); // preserves _verseLevel via setupVerseLevel()
 });
 
