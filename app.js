@@ -3010,6 +3010,8 @@ let _verseQueue      = [];   // [{ ref, text }] selected for this session
 let _verseFromSelect = false; // launched from the selection view?
 let _verseItemIndex  = -1;   // index of the current single verse within the entry (-1 = combined/n-a)
 
+let _verseSelectedIdx = new Set(); // indices into normalizeVerseEntry(_verseEntry)
+
 /** Entry point from the verse list. Single-verse → practice; multi → selection. */
 function startVersePractice(verseId) {
   const v = loadVerses().find(function (v) { return v.id === verseId; });
@@ -3033,53 +3035,231 @@ function openVerseSelect(entry, items) {
   $('verse-practice-view').classList.add('hidden');
   $('verse-select-view').classList.remove('hidden');
   $('verse-select-title').textContent = entry.title;
-  $('verse-select-all').checked = true;
+
+  // Start with everything selected, so "Practice selected" is the whole passage.
+  _verseSelectedIdx = new Set(items.map(function (_, i) { return i; }));
 
   const list = $('verse-select-list');
   list.innerHTML = '';
   items.forEach(function (it, i) {
     const ref = it.ref || ('Verse ' + (i + 1));
     const flat = it.text.replace(/\s+/g, ' ').trim();
-    const preview = flat.length > 90 ? flat.slice(0, 90) + '…' : flat;
+    const preview = flat.length > 60 ? flat.slice(0, 60) + '…' : flat;
 
     const row = document.createElement('div');
-    row.className = 'verse-select-row';
+    row.className = 'verse-select-row selected';
+    row.dataset.idx = String(i);
     row.innerHTML =
-      '<label class="verse-select-check">' +
-        '<input type="checkbox" class="verse-select-cb" data-idx="' + i + '" checked>' +
-        '<span class="verse-select-info">' +
-          '<span class="verse-select-ref">' + esc(ref) + '</span>' +
-          '<span class="verse-select-preview">' + esc(preview) + '</span>' +
-        '</span>' +
-      '</label>' +
-      '<button class="btn btn-secondary btn-sm verse-select-one" data-idx="' + i + '">Practice</button>';
+      '<input type="checkbox" class="verse-select-cb" checked ' +
+        'aria-label="Select ' + esc(ref) + '">' +
+      '<span class="verse-select-ref">' + esc(ref) + '</span>' +
+      '<span class="verse-select-preview">' + esc(preview) + '</span>';
     list.appendChild(row);
   });
+
+  updateVerseSelectCount();
 }
 
-$('verse-select-all').addEventListener('change', function () {
-  const checked = this.checked;
-  $('verse-select-list').querySelectorAll('.verse-select-cb').forEach(function (cb) {
-    cb.checked = checked;
+function updateVerseSelectCount() {
+  const total = $('verse-select-list').children.length;
+  const count = _verseSelectedIdx.size;
+
+  let label;
+  if (total > 0 && count === total) {
+    label = 'All ' + total + ' selected';
+  } else if (count === 0) {
+    label = 'None selected';
+  } else {
+    label = count + ' / ' + total + ' selected';
+  }
+
+  $('verse-select-count').textContent = label;
+}
+
+/** Reflect a selection state onto a row's markup. */
+function syncVerseRow(row, on) {
+  row.classList.toggle('selected', on);
+  const cb = row.querySelector('.verse-select-cb');
+  if (cb) cb.checked = on;
+}
+
+function setVerseRowSelected(row, on) {
+  const idx = Number(row.dataset.idx);
+  if (on) _verseSelectedIdx.add(idx);
+  else    _verseSelectedIdx.delete(idx);
+  syncVerseRow(row, on);
+  updateVerseSelectCount();
+}
+
+/*
+ * Drag-select, mirroring the question picker (renderQuestionPicker): the press
+ * anchor decides whether the drag selects or deselects, and each row is painted
+ * at most once per drag. Unlike the picker a plain click here *practises* the
+ * verse, so the drag only arms once the pointer has moved (mouse) or been held
+ * (touch) — otherwise every attempt to select would launch a session.
+ */
+(function initVerseSelectDrag() {
+  const list = $('verse-select-list');
+
+  const MOVE_THRESHOLD = 6;   // px of mouse travel before a press becomes a drag
+  const TOUCH_SLOP     = 10;  // px of finger travel that counts as a scroll instead
+  const LONG_PRESS_MS  = 350;
+
+  let dragActive = false;
+  let dragAction = null; // true = select mode, false = deselect mode
+  let anchorRow  = null;
+  let anchorX    = 0;
+  let anchorY    = 0;
+  let pressTimer = null;
+  const dragVisited = new Set();
+
+  function paint(row) {
+    const idx = Number(row.dataset.idx);
+    if (dragVisited.has(idx)) return;
+    dragVisited.add(idx);
+    setVerseRowSelected(row, dragAction);
+  }
+
+  function rowAt(x, y) {
+    const el  = document.elementFromPoint(x, y);
+    const row = el && el.closest('.verse-select-row');
+    return (row && list.contains(row)) ? row : null;
+  }
+
+  function beginDrag() {
+    dragActive = true;
+    dragVisited.clear();
+    list.classList.add('drag-selecting');
+    dragAction = !_verseSelectedIdx.has(Number(anchorRow.dataset.idx));
+    paint(anchorRow);
+  }
+
+  function cancelPress() {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+    if (anchorRow) anchorRow.classList.remove('drag-arming');
+    anchorRow = null;
+  }
+
+  function endDrag() {
+    dragActive = false;
+    anchorRow  = null;
+    list.classList.remove('drag-selecting');
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', endDrag);
+    // Cleared only after the trailing click has fired, so ending a drag on a row
+    // never also starts a practice session on it.
+    setTimeout(function () { dragVisited.clear(); }, 0);
+  }
+
+  /* — Mouse — */
+
+  function onMouseMove(e) {
+    if (!anchorRow) return;
+    if (!dragActive) {
+      if (Math.abs(e.clientX - anchorX) < MOVE_THRESHOLD &&
+          Math.abs(e.clientY - anchorY) < MOVE_THRESHOLD) return;
+      beginDrag();
+    }
+    const row = rowAt(e.clientX, e.clientY);
+    if (row) paint(row);
+  }
+
+  list.addEventListener('mousedown', function (e) {
+    const row = e.target.closest('.verse-select-row');
+    if (!row) return;
+    e.preventDefault(); // suppress native text/image dragging
+    anchorRow = row;
+    anchorX   = e.clientX;
+    anchorY   = e.clientY;
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', endDrag);
   });
+
+  /* — Touch: a long press arms the drag, so ordinary swipes still scroll — */
+
+  list.addEventListener('touchstart', function (e) {
+    if (e.touches.length !== 1) return;
+    const row = e.target.closest('.verse-select-row');
+    if (!row) return;
+    anchorRow = row;
+    anchorX   = e.touches[0].clientX;
+    anchorY   = e.touches[0].clientY;
+    row.classList.add('drag-arming');
+    pressTimer = setTimeout(function () {
+      pressTimer = null;
+      row.classList.remove('drag-arming');
+      beginDrag();
+    }, LONG_PRESS_MS);
+  }, { passive: true });
+
+  list.addEventListener('touchmove', function (e) {
+    if (!anchorRow) return;
+    const t = e.touches[0];
+    if (!dragActive) {
+      // Moved before the press was held long enough — treat it as a scroll.
+      if (Math.abs(t.clientX - anchorX) > TOUCH_SLOP ||
+          Math.abs(t.clientY - anchorY) > TOUCH_SLOP) cancelPress();
+      return;
+    }
+    e.preventDefault(); // hold the list still while painting
+    const row = rowAt(t.clientX, t.clientY);
+    if (row) paint(row);
+  }, { passive: false });
+
+  function onTouchEnd(e) {
+    if (!dragActive) {
+      cancelPress();
+      return;
+    }
+    e.preventDefault(); // no synthetic click, so the drag can't also practise
+    endDrag();
+  }
+
+  list.addEventListener('touchend', onTouchEnd, { passive: false });
+  list.addEventListener('touchcancel', onTouchEnd, { passive: false });
+
+  /* — Tap: the checkbox toggles one verse, anywhere else practises it — */
+
+  list.addEventListener('click', function (e) {
+    const row = e.target.closest('.verse-select-row');
+    if (!row || !_verseEntry) return;
+
+    const idx = Number(row.dataset.idx);
+    if (dragVisited.has(idx)) return; // this click is the tail of a drag
+
+    if (e.target.closest('.verse-select-cb')) {
+      setVerseRowSelected(row, !_verseSelectedIdx.has(idx));
+      return;
+    }
+
+    const items = normalizeVerseEntry(_verseEntry);
+    beginVerseSession([items[idx]], true, idx);
+  });
+})();
+
+$('btn-verse-select-all').addEventListener('click', function () {
+  $('verse-select-list').querySelectorAll('.verse-select-row').forEach(function (row) {
+    _verseSelectedIdx.add(Number(row.dataset.idx));
+    syncVerseRow(row, true);
+  });
+  updateVerseSelectCount();
 });
 
-$('verse-select-list').addEventListener('click', function (e) {
-  const btn = e.target.closest('.verse-select-one');
-  if (!btn || !_verseEntry) return;
-  const items = normalizeVerseEntry(_verseEntry);
-  const idx = Number(btn.dataset.idx);
-  beginVerseSession([items[idx]], true, idx);
+$('btn-verse-select-none').addEventListener('click', function () {
+  _verseSelectedIdx.clear();
+  $('verse-select-list').querySelectorAll('.verse-select-row').forEach(function (row) {
+    syncVerseRow(row, false);
+  });
+  updateVerseSelectCount();
 });
 
 $('btn-verse-practice-selected').addEventListener('click', function () {
-  if (!_verseEntry) return;
+  if (!_verseEntry || _verseSelectedIdx.size === 0) return;
   const items = normalizeVerseEntry(_verseEntry);
-  const idxs = [];
-  $('verse-select-list').querySelectorAll('.verse-select-cb').forEach(function (cb) {
-    if (cb.checked) idxs.push(Number(cb.dataset.idx));
-  });
-  if (idxs.length === 0) return;
+  const idxs = Array.from(_verseSelectedIdx).sort(function (a, b) { return a - b; });
   const selected = idxs.map(function (i) { return items[i]; });
   // A single-verse selection can still page forward through the entry.
   beginVerseSession(selected, true, selected.length === 1 ? idxs[0] : -1);

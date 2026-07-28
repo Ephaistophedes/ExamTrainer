@@ -2439,55 +2439,80 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-bottom: 0.85rem;
 }
-.verse-select-list {
+.verse-select-actions {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 0.5rem;
+  margin-left: auto;
+}
+.verse-select-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+  /* Without this the drag paints a text selection across the verses instead. */
+  user-select: none;
+}
+/* touch-action is deliberately left at its default: with `pan-y` the browser
+   claims the vertical gesture and cancels our touch events mid-paint, so the
+   non-passive touchmove handler has to be the one that decides between
+   scrolling and selecting. */
+.verse-select-list.drag-selecting {
+  touch-action: none;
 }
 .verse-select-row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.7rem 0.85rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.verse-select-check {
-  display: flex;
-  align-items: flex-start;
   gap: 0.6rem;
-  flex: 1;
-  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background var(--transition), border-color var(--transition);
+}
+.verse-select-row + .verse-select-row {
+  border-top: 1px solid var(--border);
+}
+.verse-select-row:hover {
+  background: var(--primary-light);
+}
+.verse-select-row.selected {
+  background: var(--primary-light);
+  border-left-color: var(--primary);
+}
+.verse-select-row.drag-arming {
+  background: var(--primary-light);
+  border-left-color: var(--primary-dark);
+}
+.verse-select-cb {
+  flex-shrink: 0;
+  margin: 0;
   cursor: pointer;
 }
-.verse-select-check input {
-  margin-top: 0.2rem;
-  flex-shrink: 0;
-}
-.verse-select-info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 0;
-}
 .verse-select-ref {
+  flex-shrink: 0;
   font-weight: 600;
   color: var(--text);
-  font-size: 0.95rem;
+  font-size: 0.85rem;
 }
 .verse-select-preview {
-  font-size: 0.85rem;
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.verse-select-one {
-  flex-shrink: 0;
+/* Hover feedback would otherwise flicker across every row the cursor paints. */
+.verse-select-list.drag-selecting .verse-select-row:hover {
+  background: none;
+}
+.verse-select-list.drag-selecting .verse-select-row.selected:hover {
+  background: var(--primary-light);
 }
 
 /* ─── Google Drive Sync modal ───────────────────────── */

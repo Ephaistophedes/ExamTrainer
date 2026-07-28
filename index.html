@@ -253,13 +253,14 @@
           <button id="btn-verse-select-back" class="btn btn-ghost">&larr; Back</button>
           <h2 id="verse-select-title"></h2>
         </div>
-        <p class="verse-select-hint">Pick a single verse, or check several and practice them in a row.</p>
+        <p class="verse-select-hint">Tap a verse to practice it. Drag across verses (or long-press on mobile) to select a range.</p>
         <div class="verse-select-toolbar">
-          <label class="export-check-label">
-            <input type="checkbox" id="verse-select-all" checked>
-            <span>Select all</span>
-          </label>
-          <button id="btn-verse-practice-selected" class="btn btn-primary btn-sm">Practice selected</button>
+          <span class="picker-count" id="verse-select-count">0 selected</span>
+          <div class="verse-select-actions">
+            <button id="btn-verse-select-all" class="btn btn-ghost">Select All</button>
+            <button id="btn-verse-select-none" class="btn btn-ghost">Clear</button>
+            <button id="btn-verse-practice-selected" class="btn btn-primary btn-sm">Practice selected</button>
+          </div>
         </div>
         <div id="verse-select-list" class="verse-select-list"></div>
       </div>
