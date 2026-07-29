@@ -81,6 +81,7 @@ const KEYS = {
   activeExam:  'activeExamId',
   editorDraft: 'editorDraft',
   verseBank:   'verseBank',
+  verseSelection: 'verseSelection',
 };
 
 // Listeners notified whenever persisted app data changes (used by Drive sync).
@@ -2448,6 +2449,26 @@ function saveVerses(verses) {
   emitStateChange();
 }
 
+// Remembers which items within a multi-verse entry were last selected for
+// practice, keyed by verse entry id, so reopening the picker doesn't force
+// re-selecting every time. Local-only (not part of the Drive sync backup).
+function loadVerseSelections() {
+  return loadJSON(KEYS.verseSelection, {});
+}
+
+function saveVerseSelection(verseId, idxSet) {
+  const all = loadVerseSelections();
+  all[verseId] = Array.from(idxSet);
+  saveJSON(KEYS.verseSelection, all);
+}
+
+function removeVerseSelection(verseId) {
+  const all = loadVerseSelections();
+  if (!(verseId in all)) return;
+  delete all[verseId];
+  saveJSON(KEYS.verseSelection, all);
+}
+
 function generateVerseId() {
   return 'verse_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
 }
@@ -2512,6 +2533,7 @@ $('verse-list').addEventListener('click', function (e) {
     showConfirm('Delete ' + name + '? This cannot be undone.', 'Delete', function () {
       const verses = loadVerses().filter(function (v) { return v.id !== id; });
       saveVerses(verses);
+      removeVerseSelection(id);
       renderVerseList();
     });
   }
@@ -3110,8 +3132,12 @@ function openVerseSelect(entry, items) {
   $('verse-select-view').classList.remove('hidden');
   $('verse-select-title').textContent = entry.title;
 
-  // Start with everything selected, so "Practice selected" is the whole passage.
-  _verseSelectedIdx = new Set(items.map(function (_, i) { return i; }));
+  // Restore the last selection made for this entry, if any; otherwise start
+  // with everything selected, so "Practice selected" is the whole passage.
+  const saved = loadVerseSelections()[entry.id];
+  _verseSelectedIdx = Array.isArray(saved)
+    ? new Set(saved.filter(function (i) { return i >= 0 && i < items.length; }))
+    : new Set(items.map(function (_, i) { return i; }));
 
   const list = $('verse-select-list');
   list.innerHTML = '';
@@ -3119,13 +3145,14 @@ function openVerseSelect(entry, items) {
     const ref = it.ref || ('Verse ' + (i + 1));
     const flat = it.text.replace(/\s+/g, ' ').trim();
     const preview = flat.length > 60 ? flat.slice(0, 60) + '…' : flat;
+    const on = _verseSelectedIdx.has(i);
 
     const row = document.createElement('div');
-    row.className = 'verse-select-row selected';
+    row.className = 'verse-select-row' + (on ? ' selected' : '');
     row.dataset.idx = String(i);
     row.innerHTML =
-      '<input type="checkbox" class="verse-select-cb" checked ' +
-        'aria-label="Select ' + esc(ref) + '">' +
+      '<input type="checkbox" class="verse-select-cb"' + (on ? ' checked' : '') +
+        ' aria-label="Select ' + esc(ref) + '">' +
       '<span class="verse-select-ref">' + esc(ref) + '</span>' +
       '<span class="verse-select-preview">' + esc(preview) + '</span>';
     list.appendChild(row);
@@ -3148,6 +3175,8 @@ function updateVerseSelectCount() {
   }
 
   $('verse-select-count').textContent = label;
+
+  if (_verseEntry) saveVerseSelection(_verseEntry.id, _verseSelectedIdx);
 }
 
 /** Reflect a selection state onto a row's markup. */
