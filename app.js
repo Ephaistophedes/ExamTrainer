@@ -226,6 +226,65 @@ function generateQid() {
 }
 
 /* ═══════════════════════════════════════════════════════
+   BACK STACK (Android back button / browser back)
+
+   Installed as a standalone PWA the app sits on a single
+   history entry, so the system back gesture closes it even
+   when a verse session or a modal is open. Each dismissible
+   screen pushes a history entry on open; popstate closes the
+   top one.
+
+   The entry's depth is stored in the history state rather
+   than tracked by counting events, which makes unwinding
+   self-correcting: no "am I already closing?" flag is needed
+   in either direction, and history.go(-n) (a single popstate,
+   not n of them) works too.
+
+   NOTE: `history` is shadowed by local arrays of attempt
+   records all over this file, so always say window.history.
+   ═══════════════════════════════════════════════════════ */
+
+const BackStack = (function () {
+  const stack = []; // [{ id, close }], innermost screen last
+
+  /** Open a dismissible screen. No-op if it is already open. */
+  function push(id, close) {
+    if (stack.some(function (e) { return e.id === id; })) return;
+    stack.push({ id: id, close: close });
+    window.history.pushState({ etDepth: stack.length }, '');
+  }
+
+  /**
+   * Give up a screen's history entry because it was closed from
+   * within the app. No-op when it isn't on the stack — which is
+   * how a close callback invoked by popstate avoids recursing,
+   * since popstate pops the entry before calling it.
+   */
+  function release(id) {
+    let i = -1;
+    for (let k = 0; k < stack.length; k++) {
+      if (stack[k].id === id) { i = k; break; }
+    }
+    if (i === -1) return;
+
+    const n = stack.length - i;
+    stack.splice(i, n); // synchronous, so the popstate below finds nothing to do
+    window.history.go(-n);
+  }
+
+  window.addEventListener('popstate', function (e) {
+    const depth = (e.state && typeof e.state.etDepth === 'number') ? e.state.etDepth : 0;
+    while (stack.length > depth) {
+      stack.pop().close();
+    }
+  });
+
+  return { push: push, release: release };
+})();
+
+window.BackStack = BackStack;
+
+/* ═══════════════════════════════════════════════════════
    TAB SWITCHING
    ═══════════════════════════════════════════════════════ */
 
@@ -491,6 +550,8 @@ function resetExportFolder() {
 }
 
 function openExportModal() {
+  BackStack.push('modal-export', closeExportModal);
+
   const exams = loadExams();
   const list  = $('export-exam-list');
   list.innerHTML = '';
@@ -533,6 +594,7 @@ function openExportModal() {
 }
 
 function closeExportModal() {
+  BackStack.release('modal-export');
   $('export-modal').classList.add('hidden');
 }
 
@@ -642,11 +704,13 @@ function openEditor(examId) {
   $('editor-name').value = exam.name;
   renderEditorQuestions(exam.questions);
 
+  BackStack.push('modal-editor', closeEditor);
   $('editor-modal').classList.remove('hidden');
   $('editor-name').focus();
 }
 
 function closeEditor() {
+  BackStack.release('modal-editor');
   $('editor-modal').classList.add('hidden');
   editingExamId = null;
 }
@@ -1127,18 +1191,21 @@ function showConfirm(message, actionLabel, callback) {
   _confirmCallback = callback;
   $('confirm-message').textContent = message;
   $('btn-confirm-yes').textContent = actionLabel || 'Confirm';
+  BackStack.push('modal-confirm', dismissConfirm);
   $('confirm-modal').classList.remove('hidden');
 }
 
 function dismissConfirm() {
+  BackStack.release('modal-confirm');
   $('confirm-modal').classList.add('hidden');
   _confirmCallback = null;
 }
 
 $('btn-confirm-yes').addEventListener('click', function () {
-  $('confirm-modal').classList.add('hidden');
-  if (typeof _confirmCallback === 'function') _confirmCallback();
-  _confirmCallback = null;
+  // dismissConfirm clears the callback, so hold onto it first.
+  const callback = _confirmCallback;
+  dismissConfirm();
+  if (typeof callback === 'function') callback();
 });
 
 $('btn-confirm-no').addEventListener('click', dismissConfirm);
@@ -2591,6 +2658,8 @@ function resetVerseExportFolder() {
 }
 
 function openVerseExportModal() {
+  BackStack.push('modal-verse-export', closeVerseExportModal);
+
   const verses = loadVerses();
   const list   = $('verse-export-list');
   list.innerHTML = '';
@@ -2633,6 +2702,7 @@ function openVerseExportModal() {
 }
 
 function closeVerseExportModal() {
+  BackStack.release('modal-verse-export');
   $('verse-export-modal').classList.add('hidden');
 }
 
@@ -2882,6 +2952,7 @@ function openVerseEditor(verseId) {
   }
 
   hideAlert('verse-editor-alert');
+  BackStack.push('modal-verse-editor', closeVerseEditor);
   $('verse-editor-modal').classList.remove('hidden');
   const firstText = $('verse-ed-list').querySelector('.verse-ed-text');
   if (firstText) firstText.focus();
@@ -2906,6 +2977,7 @@ function deriveVerseTitle(items, existingTitle) {
 }
 
 function closeVerseEditor() {
+  BackStack.release('modal-verse-editor');
   $('verse-editor-modal').classList.add('hidden');
   _editingVerseId = null;
 }
@@ -3030,6 +3102,8 @@ function startVersePractice(verseId) {
 /* ─── Selection view (multi-verse entries) ─────────── */
 
 function openVerseSelect(entry, items) {
+  // No-ops when returning here from practice, which is why push is idempotent.
+  BackStack.push('verse-select', exitVerseSelect);
   _practiceVerse = null;
   $('verse-list-view').classList.add('hidden');
   $('verse-practice-view').classList.add('hidden');
@@ -3265,15 +3339,19 @@ $('btn-verse-practice-selected').addEventListener('click', function () {
   beginVerseSession(selected, true, selected.length === 1 ? idxs[0] : -1);
 });
 
-$('btn-verse-select-back').addEventListener('click', function () {
+function exitVerseSelect() {
+  BackStack.release('verse-select');
   $('verse-select-view').classList.add('hidden');
   $('verse-list-view').classList.remove('hidden');
   _verseEntry = null;
-});
+}
+
+$('btn-verse-select-back').addEventListener('click', exitVerseSelect);
 
 /* ─── Practice session ─────────────────────────────── */
 
 function beginVerseSession(queue, fromSelect, itemIndex) {
+  BackStack.push('verse-practice', exitVersePractice);
   _verseQueue      = queue;
   _verseFromSelect = !!fromSelect;
   _verseItemIndex  = (typeof itemIndex === 'number') ? itemIndex : -1;
@@ -3331,7 +3409,8 @@ function updateVerseNav() {
   prevBtn.classList.toggle('hidden', !hasPrev);
 }
 
-$('btn-verse-back').addEventListener('click', function () {
+function exitVersePractice() {
+  BackStack.release('verse-practice');
   $('verse-practice-view').classList.add('hidden');
   _practiceVerse = null;
   _verseModel = null;
@@ -3342,7 +3421,9 @@ $('btn-verse-back').addEventListener('click', function () {
     $('verse-list-view').classList.remove('hidden');
     _verseEntry = null;
   }
-});
+}
+
+$('btn-verse-back').addEventListener('click', exitVersePractice);
 
 /* ─── Level setup ──────────────────────────────────── */
 

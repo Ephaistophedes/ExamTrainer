@@ -345,9 +345,14 @@
       setStatus('');
     }
     render();
+    if (window.BackStack) window.BackStack.push('modal-drive', closeModal);
     m.classList.remove('hidden');
   }
-  function closeModal() { const m = $('drive-modal'); if (m) m.classList.add('hidden'); }
+  function closeModal() {
+    if (window.BackStack) window.BackStack.release('modal-drive');
+    const m = $('drive-modal');
+    if (m) m.classList.add('hidden');
+  }
 
   function busy(btn, label, work) {
     const orig = btn ? btn.textContent : null;
