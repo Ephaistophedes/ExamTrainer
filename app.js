@@ -1657,12 +1657,39 @@ function renderQuestions(questions) {
       }
     });
 
-    if (!inp.dataset.spaceHop) return;
+    if (!inp.classList.contains('fib-inline-input')) return;
 
     function caretAtEnd() {
       return inp.selectionStart === inp.selectionEnd &&
              inp.selectionStart === inp.value.length;
     }
+
+    /* Backspace in an already-empty blank steps back to the previous one, so
+     * a wrong word two blanks ago is reachable without going for the mouse.
+     * Bound on both events for the same reason as the space hop: Android
+     * reports the keydown as "Unidentified", desktop never sends beforeinput
+     * for a delete that has nothing to delete. */
+    function stepBack() {
+      const prev = allInputs[i - 1];
+      // Stops at the first blank, and won't reverse into a plain answer field.
+      if (!prev || !prev.classList.contains('fib-inline-input')) return false;
+      prev.focus();
+      const end = prev.value.length;
+      try { prev.setSelectionRange(end, end); } catch (err) { /* not selectable */ }
+      return true;
+    }
+
+    inp.addEventListener('keydown', function (e) {
+      if (e.key !== 'Backspace' || inp.value !== '') return;
+      if (stepBack()) e.preventDefault();
+    });
+
+    inp.addEventListener('beforeinput', function (e) {
+      if (e.inputType !== 'deleteContentBackward' || inp.value !== '') return;
+      if (stepBack()) e.preventDefault();
+    });
+
+    if (!inp.dataset.spaceHop) return;
 
     // beforeinput rather than keydown: Android soft keyboards report most
     // keydowns as "Unidentified" while composing, but the inserted text is
