@@ -30,17 +30,29 @@ GitHub Pages redeploys automatically.
 
 ## ⚠️ Bump the service worker cache version on every release
 
-Installed phones cache the app. The service worker uses a
-**stale-while-revalidate** strategy: a returning, online device fetches new files
-in the background and applies them on the next launch. To guarantee old caches are
-purged and the update is picked up cleanly, **bump the cache version** before you push:
+Installed devices cache the app. The service worker serves **our own files
+network-first**, so an online launch always runs the release that is live —
+never the previous one. The cache is the offline fallback, not the default
+source. Still **bump the cache version** before you push, so stale caches from
+older releases are purged:
 
 1. Open [`sw.js`](sw.js).
 2. Change `CACHE_VERSION`, e.g. `'v1'` → `'v2'`.
 3. Commit and push.
 
-On the next one or two launches (while online) the installed app updates itself and
-reloads once automatically. No manual reinstall needed on the phone.
+An online device picks the update up on its **next launch**. No manual reinstall
+needed on the phone.
+
+> Third-party assets (Google Fonts) stay stale-while-revalidate — they never
+> change under us, so they should not hold up a launch.
+
+### If a change doesn't appear
+
+Confirm which build is actually running before digging into the code — a served
+stale copy looks exactly like a broken feature. In DevTools → Console:
+`caches.keys()` shows the live cache version. Hard-reload with
+**Ctrl/Cmd + Shift + R**, or DevTools → Application → Service Workers →
+*Unregister* for a clean slate.
 
 ## Local testing
 
