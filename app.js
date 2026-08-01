@@ -1569,6 +1569,10 @@ function renderQuestions(questions) {
       // Answers are typed straight into the sentence, in place of each blank.
       const sentenceHtml = blankTokens.map(function (t) {
         if (!t.blank) return '<span class="fib-sentence-word">' + esc(t.text) + '</span>';
+        // Space hops to the next blank, so a passage can be typed straight
+        // through. Blanks whose own answer is multi-word opt out, otherwise
+        // "son of man" would fling you forward halfway through typing it.
+        const oneWord = !/\s/.test((q.correct[t.part] || '').trim());
         // Punctuation rides inside the slot so the flex gap can't split it off.
         return (
           '<span class="fib-blank-slot">' +
@@ -1579,6 +1583,7 @@ function renderQuestions(questions) {
               ' class="input answer-part-input fib-inline-input"' +
               ' data-qid="' + q.id + '"' +
               ' data-part="' + t.part + '"' +
+              (oneWord ? ' data-space-hop="1"' : '') +
               ' placeholder="___"' +
               ' autocomplete="off"' +
               ' spellcheck="false"' +
@@ -1637,17 +1642,46 @@ function renderQuestions(questions) {
   });
 
   const allInputs = list.querySelectorAll('.answer-part-input');
+
+  function focusAfter(i) {
+    const next = allInputs[i + 1];
+    if (next) next.focus();
+    else $('btn-submit').focus();
+  }
+
   allInputs.forEach(function (inp, i) {
     inp.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') {
         e.preventDefault();
-        const next = allInputs[i + 1];
-        if (next) {
-          next.focus();
-        } else {
-          $('btn-submit').focus();
-        }
+        focusAfter(i);
       }
+    });
+
+    if (!inp.dataset.spaceHop) return;
+
+    function caretAtEnd() {
+      return inp.selectionStart === inp.selectionEnd &&
+             inp.selectionStart === inp.value.length;
+    }
+
+    // beforeinput rather than keydown: Android soft keyboards report most
+    // keydowns as "Unidentified" while composing, but the inserted text is
+    // always reported here. Only hop from the end of the field, so going back
+    // to correct a word still types a space; and only for typed text, so a
+    // pasted phrase lands intact.
+    inp.addEventListener('beforeinput', function (e) {
+      if (e.inputType !== 'insertText' || e.data !== ' ' || !caretAtEnd()) return;
+      e.preventDefault();
+      focusAfter(i);
+    });
+
+    // Safety net for keyboards that commit a composition and its trailing
+    // space as one uncancelable event. Anchored to the end so it can't
+    // truncate a paste.
+    inp.addEventListener('input', function () {
+      if (!/ $/.test(inp.value)) return;
+      inp.value = inp.value.replace(/ +$/, '');
+      focusAfter(i);
     });
   });
 
