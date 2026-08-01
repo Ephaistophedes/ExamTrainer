@@ -1512,6 +1512,43 @@ function questionDisplayNum(q, fallbackIdx) {
   return fallbackIdx + 1;
 }
 
+// A blank written as a run of underscores, optionally hugged by punctuation
+// ("___", "___." or "(___)"). [^\w] can't match an underscore, so the leading
+// and trailing groups never eat into the blank itself.
+const BLANK_UNDERSCORES = /^([^\w]*)_{2,}([^\w]*)$/;
+
+/*
+ * Work out whether a question's answers belong inside its sentence, and where.
+ * Blanks get marked two ways: the editor writes [[answer]] into `sentence`,
+ * while imported JSON and hand-typed questions use runs of underscores in
+ * `question`. Returns the tokens to render inline, or null when the text has
+ * no blanks or their count doesn't match the answer count — those fall back
+ * to the numbered answer list.
+ */
+function parseBlankTokens(q) {
+  const native = q.type === 'fill_blank' && !!q.sentence;
+  const text   = native ? q.sentence : q.question;
+  if (!text) return null;
+
+  const tokens = [];
+  let blanks = 0;
+
+  text.split(/\s+/).filter(Boolean).forEach(function (raw) {
+    if (native && raw.startsWith('[[') && raw.endsWith(']]')) {
+      tokens.push({ blank: true, part: blanks++, before: '', after: '' });
+      return;
+    }
+    const m = native ? null : BLANK_UNDERSCORES.exec(raw);
+    if (m) {
+      tokens.push({ blank: true, part: blanks++, before: m[1], after: m[2] });
+      return;
+    }
+    tokens.push({ blank: false, text: raw });
+  });
+
+  return (blanks > 0 && blanks === q.correct.length) ? tokens : null;
+}
+
 function renderQuestions(questions) {
   const list = $('question-list');
   list.innerHTML = '';
@@ -1526,36 +1563,46 @@ function renderQuestions(questions) {
     card.className = 'question-card';
     card.id = 'qcard-' + q.id;
 
-    if (q.type === 'fill_blank') {
-      // Render sentence with inline inputs for each blank
-      const tokens = q.sentence.split(/\s+/).filter(Boolean);
-      let blankIdx = 0;
-      const sentenceHtml = tokens.map(function (token) {
-        if (token.startsWith('[[') && token.endsWith(']]')) {
-          const pi = blankIdx++;
-          return (
+    const blankTokens = parseBlankTokens(q);
+
+    if (blankTokens) {
+      // Answers are typed straight into the sentence, in place of each blank.
+      const sentenceHtml = blankTokens.map(function (t) {
+        if (!t.blank) return '<span class="fib-sentence-word">' + esc(t.text) + '</span>';
+        // Punctuation rides inside the slot so the flex gap can't split it off.
+        return (
+          '<span class="fib-blank-slot">' +
+            esc(t.before) +
+            '<span class="fib-blank-num">' + (t.part + 1) + '</span>' +
             '<input' +
               ' type="text"' +
               ' class="input answer-part-input fib-inline-input"' +
               ' data-qid="' + q.id + '"' +
-              ' data-part="' + pi + '"' +
+              ' data-part="' + t.part + '"' +
               ' placeholder="___"' +
               ' autocomplete="off"' +
               ' spellcheck="false"' +
-              ' aria-label="Blank ' + (pi + 1) + ' for question ' + (i + 1) + '"' +
-            '>'
-          );
-        }
-        return '<span class="fib-sentence-word">' + esc(token) + '</span>';
+              ' aria-label="Blank ' + (t.part + 1) + ' for question ' + (i + 1) + '"' +
+            '>' +
+            esc(t.after) +
+          '</span>'
+        );
       }).join(' ');
 
+      // Numbered so each line points back at the blank it grades. Revealed by
+      // applyFeedbackToCard once the exam is marked.
       const feedbackHtml = q.correct.map(function (_, pi) {
-        return '<div class="answer-part-feedback" id="fb-' + q.id + '-' + pi + '"></div>';
+        return (
+          '<div class="fib-feedback-row" id="fbrow-' + q.id + '-' + pi + '" hidden>' +
+            '<span class="fib-feedback-num">' + (pi + 1) + '.</span>' +
+            '<div class="answer-part-feedback" id="fb-' + q.id + '-' + pi + '"></div>' +
+          '</div>'
+        );
       }).join('');
 
       card.innerHTML =
         '<div class="question-num">Question ' + questionDisplayNum(q, i) + '</div>' +
-        '<div class="fib-sentence-display">' + sentenceHtml + '</div>' +
+        '<div class="fib-sentence-display"><span class="fib-line">' + sentenceHtml + '</span></div>' +
         '<div class="fib-feedbacks">' + feedbackHtml + '</div>' +
         '<div class="question-partial-label" id="partial-' + q.id + '" hidden></div>';
     } else {
@@ -1630,6 +1677,12 @@ function applyFeedbackToCard(card, q, record) {
     const pi = parts[i];
     const fb = $('fb-' + q.id + '-' + pi);
     if (!fb) return;
+    const fbRow = $('fbrow-' + q.id + '-' + pi); // inline blanks only
+    if (fbRow) fbRow.hidden = false;
+    // Mark the blank itself too — with a sentence full of them, the feedback
+    // list alone doesn't show you *where* you went wrong.
+    const inp = card.querySelector('.fib-inline-input[data-part="' + pi + '"]');
+    if (inp) inp.classList.add(isCorrect ? 'fib-correct' : 'fib-wrong');
     if (isCorrect) {
       fb.className   = 'answer-part-feedback correct-fb';
       fb.textContent = '\u2713 Correct';
@@ -1889,15 +1942,15 @@ function getWeakPartMap(exam) {
 
 // Decide which part indices to render/grade for each current question.
 // Normally every part; in weak mode with "sub-questions only" enabled, just
-// the parts that have been missed (skipped for fill-in-the-blank, which must
-// always show the whole sentence).
+// the parts that have been missed (skipped for questions whose answers sit
+// inline in the sentence, which must always show the whole sentence).
 function computeActiveParts(exam) {
   activeParts = {};
   const partMap = (trainerMode === 'weak' && weakPartsOnly) ? getWeakPartMap(exam) : null;
 
   currentQuestions.forEach(function (q) {
     const all = q.correct.map(function (_, pi) { return pi; });
-    if (partMap && q.type !== 'fill_blank') {
+    if (partMap && !parseBlankTokens(q)) {
       const missed = (partMap[q.id] || []).filter(function (pi) { return pi < q.correct.length; });
       if (missed.length > 0 && missed.length < all.length) {
         activeParts[q.id] = missed;

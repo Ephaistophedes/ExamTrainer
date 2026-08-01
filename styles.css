@@ -2184,9 +2184,12 @@ main {
 /* Trainer: inline blank input */
 .fib-inline-input {
   display: inline-block;
-  width: auto;
-  min-width: 5rem;
-  max-width: 13rem;
+  /* An input's intrinsic width is ~20 characters, which on a phone pushes
+     every blank onto its own line. Size them so the sentence still reads as
+     a sentence; longer answers just scroll inside the box. */
+  width: 7rem;
+  min-width: 0;
+  max-width: 100%;
   padding: 0.2rem 0.45rem;
   font-size: 0.9rem;
   height: 2rem;
@@ -2195,9 +2198,48 @@ main {
   border-radius: var(--radius-sm);
 }
 
+/* Keeps a blank and its hugging punctuation together as one flex item */
+.fib-blank-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.fib-blank-num {
+  align-self: flex-start;
+  margin-top: 0.2rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 /* Trainer: feedback area below sentence */
 .fib-feedbacks {
   margin-top: 0.25rem;
+}
+
+/* One row per blank, numbered to match; revealed only once marked */
+.fib-feedback-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.fib-feedback-row[hidden] {
+  display: none;
+}
+
+.fib-feedback-num {
+  flex: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+@media (max-width: 480px) {
+  .fib-inline-input {
+    width: 5.5rem;
+  }
 }
 
 /* Verses: blank-practice view */
