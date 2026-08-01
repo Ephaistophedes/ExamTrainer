@@ -2058,24 +2058,69 @@ function renderSelfMarkView() {
     const userAns   = uRec ? uRec.userAnswers : parts.map(function () { return ''; });
     const multiPart = q.correct.length > 1;
 
-    // Left cell: question text + user's answers
+    // Left cell: the question and what was written for it.
     const leftCell     = document.createElement('div');
     leftCell.className = 'smg-left';
 
-    const userAnsHtml = parts.map(function (pi, i) {
-      const ans = userAns[i];
-      return (
-        '<div class="smg-user-ans">' +
-          (multiPart ? '<span class="smg-part-num">' + (pi + 1) + '.</span>' : '') +
-          (ans ? esc(ans) : '<span class="smg-no-answer">\u2014</span>') +
-        '</div>'
-      );
-    }).join('');
+    const blankTokens = parseBlankTokens(q);
 
-    leftCell.innerHTML =
-      '<div class="smg-q-num">Question ' + questionDisplayNum(q, qi) + '</div>' +
-      '<div class="smg-q-text">' + esc(q.question) + '</div>' +
-      '<div class="smg-user-answers">' + userAnsHtml + '</div>';
+    if (blankTokens) {
+      // Reads back as one sentence with the answers in place, like the exam
+      // view \u2014 and each answer doubles as its own mark button.
+      const sentenceHtml = blankTokens.map(function (t) {
+        if (!t.blank) return '<span class="fib-sentence-word">' + esc(t.text) + '</span>';
+        const ai   = parts.indexOf(t.part);
+        const ans  = ai === -1 ? '' : userAns[ai];
+        const mark = selfMarkResults[q.id + '-' + t.part];
+
+        let cls = 'smg-blank-chip';
+        if (mark === true)       cls += ' marked-correct';
+        else if (mark === false) cls += ' marked-incorrect';
+
+        return (
+          '<span class="fib-blank-slot">' +
+            esc(t.before) +
+            '<span class="fib-blank-num">' + (t.part + 1) + '</span>' +
+            '<button type="button" class="' + cls + '"' +
+              ' id="smc-' + q.id + '-' + t.part + '" data-part="' + t.part + '"' +
+              ' aria-label="Answer ' + (t.part + 1) + ': ' + esc(ans || 'blank') +
+                '. Click to mark correct, double-click to mark incorrect.">' +
+              (ans ? esc(ans) : '<span class="smg-no-answer">\u2014</span>') +
+            '</button>' +
+            esc(t.after) +
+          '</span>'
+        );
+      }).join(' ');
+
+      leftCell.innerHTML =
+        '<div class="smg-q-num">Question ' + questionDisplayNum(q, qi) + '</div>' +
+        '<div class="smg-q-text"><span class="fib-line">' + sentenceHtml + '</span></div>' +
+        '<div class="smg-mark-hint">Tap an answer to mark it correct, double-tap for incorrect.</div>';
+
+      leftCell.querySelectorAll('.smg-blank-chip').forEach(function (chip) {
+        const pi = Number(chip.dataset.part);
+        // Deliberately untimed: the first tap marks correct straight away and
+        // the second overrides it, so a single tap never waits on a dblclick
+        // timer to find out whether a second one is coming.
+        chip.addEventListener('click',    function () { setPartMark(q.id, pi, true); });
+        chip.addEventListener('dblclick', function () { setPartMark(q.id, pi, false); });
+      });
+    } else {
+      const userAnsHtml = parts.map(function (pi, i) {
+        const ans = userAns[i];
+        return (
+          '<div class="smg-user-ans">' +
+            (multiPart ? '<span class="smg-part-num">' + (pi + 1) + '.</span>' : '') +
+            (ans ? esc(ans) : '<span class="smg-no-answer">\u2014</span>') +
+          '</div>'
+        );
+      }).join('');
+
+      leftCell.innerHTML =
+        '<div class="smg-q-num">Question ' + questionDisplayNum(q, qi) + '</div>' +
+        '<div class="smg-q-text">' + esc(q.question) + '</div>' +
+        '<div class="smg-user-answers">' + userAnsHtml + '</div>';
+    }
 
     // Right cell: correct answers + mark buttons
     const rightCell     = document.createElement('div');
@@ -2110,8 +2155,8 @@ function renderSelfMarkView() {
 
     rightCell.querySelectorAll('.mark-btn').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        handleMarkBtn(
-          Number(btn.dataset.qid),
+        setPartMark(
+          q.id,
           Number(btn.dataset.part),
           btn.classList.contains('mark-check')
         );
@@ -2123,7 +2168,10 @@ function renderSelfMarkView() {
   });
 }
 
-function handleMarkBtn(qid, partIdx, isCorrect) {
+// A part can be marked from either side of the grid — the ✓/✗ buttons on the
+// right, or the answer itself in the sentence on the left — so both have to
+// follow whichever was used.
+function setPartMark(qid, partIdx, isCorrect) {
   const key    = qid + '-' + partIdx;
   const partEl = $('smp-' + qid + '-' + partIdx);
   if (!partEl) return;
@@ -2136,6 +2184,12 @@ function handleMarkBtn(qid, partIdx, isCorrect) {
 
   partEl.classList.toggle('marked-correct', isCorrect);
   partEl.classList.toggle('marked-incorrect', !isCorrect);
+
+  const chip = $('smc-' + qid + '-' + partIdx);
+  if (chip) {
+    chip.classList.toggle('marked-correct', isCorrect);
+    chip.classList.toggle('marked-incorrect', !isCorrect);
+  }
 
   updateSelfMarkScore();
 }
