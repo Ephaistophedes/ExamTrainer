@@ -2079,6 +2079,11 @@ function renderSelfMarkView() {
   $('self-mark-score-total').textContent = totalParts;
   updateSelfMarkScore();
 
+  // Sentence questions are marked on the sentence itself, so they take the
+  // whole width; the answer column only exists for the ones that still need it.
+  let needsAnswerCol = false;
+  let lastRow = [];
+
   selfMarkQuestionsSnap.forEach(function (q, qi) {
     const parts     = activeParts[q.id] || q.correct.map(function (_, pi) { return pi; });
     const uRec      = selfMarkUserAnswers.find(function (a) { return a.id === q.id; });
@@ -2124,6 +2129,8 @@ function renderSelfMarkView() {
         '<div class="smg-q-text"><span class="fib-line">' + sentenceHtml + '</span></div>' +
         '<div class="smg-mark-hint">Tap an answer to mark it correct, double-tap for incorrect.</div>';
 
+      leftCell.classList.add('smg-full');
+
       leftCell.querySelectorAll('.smg-blank-chip').forEach(function (chip) {
         const pi = Number(chip.dataset.part);
         // Deliberately untimed: the first tap marks correct straight away and
@@ -2132,22 +2139,28 @@ function renderSelfMarkView() {
         chip.addEventListener('click',    function () { setPartMark(q.id, pi, true); });
         chip.addEventListener('dblclick', function () { setPartMark(q.id, pi, false); });
       });
-    } else {
-      const userAnsHtml = parts.map(function (pi, i) {
-        const ans = userAns[i];
-        return (
-          '<div class="smg-user-ans">' +
-            (multiPart ? '<span class="smg-part-num">' + (pi + 1) + '.</span>' : '') +
-            (ans ? esc(ans) : '<span class="smg-no-answer">\u2014</span>') +
-          '</div>'
-        );
-      }).join('');
 
-      leftCell.innerHTML =
-        '<div class="smg-q-num">Question ' + questionDisplayNum(q, qi) + '</div>' +
-        '<div class="smg-q-text">' + esc(q.question) + '</div>' +
-        '<div class="smg-user-answers">' + userAnsHtml + '</div>';
+      grid.appendChild(leftCell);
+      lastRow = [leftCell];
+      return;
     }
+
+    needsAnswerCol = true;
+
+    const userAnsHtml = parts.map(function (pi, i) {
+      const ans = userAns[i];
+      return (
+        '<div class="smg-user-ans">' +
+          (multiPart ? '<span class="smg-part-num">' + (pi + 1) + '.</span>' : '') +
+          (ans ? esc(ans) : '<span class="smg-no-answer">\u2014</span>') +
+        '</div>'
+      );
+    }).join('');
+
+    leftCell.innerHTML =
+      '<div class="smg-q-num">Question ' + questionDisplayNum(q, qi) + '</div>' +
+      '<div class="smg-q-text">' + esc(q.question) + '</div>' +
+      '<div class="smg-user-answers">' + userAnsHtml + '</div>';
 
     // Right cell: correct answers + mark buttons
     const rightCell     = document.createElement('div');
@@ -2192,25 +2205,33 @@ function renderSelfMarkView() {
 
     grid.appendChild(leftCell);
     grid.appendChild(rightCell);
+    lastRow = [leftCell, rightCell];
   });
+
+  // Rows are one or two cells wide, so which cells close the grid — and so go
+  // without a bottom rule — can't be worked out from their position alone.
+  grid.classList.toggle('smg-sentence-only', !needsAnswerCol);
+  lastRow.forEach(function (cell) { cell.classList.add('smg-row-end'); });
 }
 
-// A part can be marked from either side of the grid — the ✓/✗ buttons on the
-// right, or the answer itself in the sentence on the left — so both have to
-// follow whichever was used.
+// A part is marked from wherever it was drawn: the ✓/✗ row in the answer
+// column, or — for a sentence, which has no answer column — the answer itself.
+// Both are updated when both are on screen.
 function setPartMark(qid, partIdx, isCorrect) {
-  const key    = qid + '-' + partIdx;
-  const partEl = $('smp-' + qid + '-' + partIdx);
-  if (!partEl) return;
+  const key = qid + '-' + partIdx;
+  if (!(key in selfMarkResults)) return;
 
   selfMarkResults[key] = isCorrect;
 
-  partEl.querySelectorAll('.mark-btn').forEach(function (b) {
-    b.classList.toggle('active', b.classList.contains('mark-check') === isCorrect);
-  });
+  const partEl = $('smp-' + qid + '-' + partIdx);
+  if (partEl) {
+    partEl.querySelectorAll('.mark-btn').forEach(function (b) {
+      b.classList.toggle('active', b.classList.contains('mark-check') === isCorrect);
+    });
 
-  partEl.classList.toggle('marked-correct', isCorrect);
-  partEl.classList.toggle('marked-incorrect', !isCorrect);
+    partEl.classList.toggle('marked-correct', isCorrect);
+    partEl.classList.toggle('marked-incorrect', !isCorrect);
+  }
 
   const chip = $('smc-' + qid + '-' + partIdx);
   if (chip) {

@@ -1526,8 +1526,19 @@ main {
   border-right: 1px solid var(--border);
 }
 
+/* A sentence is marked on itself, so it takes the row on its own */
+.smg-full {
+  grid-column: 1 / -1;
+  border-right: none;
+}
+
+/* ...and when that's every question, the answer column goes with them */
+.self-mark-grid.smg-sentence-only { grid-template-columns: 1fr; }
+.self-mark-grid.smg-sentence-only .smg-col-header:first-child { border-right: none; }
+.self-mark-grid.smg-sentence-only .smg-col-header:nth-child(2) { display: none; }
+
 /* Remove bottom border from last row */
-.self-mark-grid > div:nth-last-child(-n+2) {
+.self-mark-grid .smg-row-end {
   border-bottom: none;
 }
 
@@ -1827,8 +1838,12 @@ main {
 
   .smg-right { padding-top: 0.25rem; }
 
-  .self-mark-grid > div:nth-last-child(-n+2) { border-bottom: 1px solid var(--border); }
-  .self-mark-grid > div:last-child { border-bottom: none; }
+  /* A sentence row is a whole question, so it keeps the divider its answer
+     column would otherwise have carried. */
+  .smg-full {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1rem;
+  }
 
   /* Mark buttons: 34px → 44px for comfortable thumb tapping */
   .mark-btn { width: 44px; height: 44px; font-size: 1.1rem; }
