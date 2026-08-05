@@ -50,6 +50,7 @@
           <button id="btn-import" class="btn btn-secondary">Import JSON</button>
           <button id="btn-export" class="btn btn-secondary">Export</button>
           <button id="btn-drive" class="btn btn-secondary" title="Sync with Google Drive">☁ Drive</button>
+          <button id="btn-create-folder" class="btn btn-secondary">+ Create Folder</button>
           <button id="btn-create" class="btn btn-primary">+ Create New Exam</button>
         </div>
       </div>
@@ -64,6 +65,20 @@
       <div id="no-exams" class="empty-state hidden">
         <div class="empty-icon">📋</div>
         <p>No exams yet. Import a JSON file or create a new exam to get started.</p>
+      </div>
+
+      <!-- Selection-mode action bar (position:fixed, shown only while selecting) -->
+      <div class="bottom-bar exam-select-bar hidden" id="exam-select-bar">
+        <div class="exam-select-head">
+          <span id="exam-select-count" class="exam-select-count">0 selected</span>
+          <button id="btn-sel-cancel" class="btn-icon" title="Cancel selection" aria-label="Cancel selection">&#x2715;</button>
+        </div>
+        <div class="exam-select-actions">
+          <button id="btn-sel-new-folder" class="btn btn-primary">New folder&hellip;</button>
+          <button id="btn-sel-add-folder" class="btn btn-secondary">Add to folder&hellip;</button>
+          <button id="btn-sel-remove-folder" class="btn btn-secondary">Remove</button>
+          <button id="btn-sel-delete" class="btn btn-danger">Delete</button>
+        </div>
       </div>
 
     </section>
@@ -468,6 +483,44 @@
       </div>
       <div class="modal-footer">
         <button id="btn-drive-cancel" class="btn btn-ghost">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Folder Name Modal (create + rename) ─────────── -->
+  <div id="folder-name-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folder-name-title">
+    <div class="modal-backdrop" id="folder-name-backdrop"></div>
+    <div class="modal-panel modal-panel-sm">
+      <div class="modal-header">
+        <h2 id="folder-name-title">New Folder</h2>
+        <button id="folder-name-close" class="btn-icon" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="folder-name-input">Folder Name</label>
+          <input type="text" id="folder-name-input" class="input" placeholder="e.g. Revelation" autocomplete="off">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-folder-name-save" class="btn btn-primary" disabled>Save</button>
+        <button id="btn-folder-name-cancel" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Folder Picker Modal ─────────────────────────── -->
+  <div id="folder-pick-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folder-pick-title">
+    <div class="modal-backdrop" id="folder-pick-backdrop"></div>
+    <div class="modal-panel modal-panel-sm">
+      <div class="modal-header">
+        <h2 id="folder-pick-title">Add to Folder</h2>
+        <button id="folder-pick-close" class="btn-icon" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div id="folder-pick-list" class="folder-pick-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-folder-pick-cancel" class="btn btn-ghost">Cancel</button>
       </div>
     </div>
   </div>

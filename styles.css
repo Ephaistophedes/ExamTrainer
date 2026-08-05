@@ -477,6 +477,208 @@ main {
   flex-wrap: wrap;
 }
 
+/* ─── Folders ───────────────────────────────────────── */
+
+.exam-folder {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem 0.5rem 0.5rem;
+}
+
+.folder-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.5rem;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-toggle:hover { background: var(--surface-hover); }
+
+.folder-chevron {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: transform var(--transition);
+  transform: rotate(90deg);
+}
+
+.exam-folder.collapsed .folder-chevron { transform: rotate(0deg); }
+
+.folder-name {
+  font-weight: 600;
+  font-size: 0.975rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folder-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.folder-actions {
+  display: flex;
+  gap: 0.2rem;
+  flex-shrink: 0;
+}
+
+.folder-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0 0.75rem 0.75rem;
+}
+
+.exam-folder.collapsed .folder-body { display: none; }
+
+.folder-empty {
+  font-size: 0.85rem;
+  color: var(--text-subtle);
+  font-style: italic;
+  padding: 0.25rem 0.5rem 0.5rem;
+}
+
+/* Folder picker rows */
+.folder-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.folder-pick-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.7rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.folder-pick-item:hover {
+  background: var(--primary-light);
+  border-color: var(--primary);
+}
+
+.folder-pick-name {
+  font-weight: 600;
+  font-size: 0.925rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-pick-count {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ─── Selection mode ────────────────────────────────── */
+
+/* The check rides in the card's flex row, so it only takes space when shown */
+.exam-check { display: none; }
+
+.exam-list.selecting .exam-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border-dark);
+  border-radius: 999px;
+  background: var(--bg);
+  color: transparent;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.exam-list.selecting .exam-card {
+  cursor: pointer;
+  user-select: none;          /* a long press selects, it doesn't grab text */
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* The whole card is the tap target while selecting */
+.exam-list.selecting .exam-card-actions { display: none; }
+
+.exam-card.selected {
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.exam-list.selecting .exam-card.selected .exam-check {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+/* Held long enough to matter, before the press completes */
+.exam-card.press-arming {
+  transform: scale(0.985);
+  transition: transform 0.2s ease;
+}
+
+/* Room for the fixed action bar under the last card. The bar wraps to as many
+   rows as it needs, so its height is measured in updateExamSelectBar(). */
+.exam-list.selecting { padding-bottom: calc(var(--exam-select-bar-h, 5rem) + 1.5rem); }
+
+.exam-select-bar {
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.exam-select-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.exam-select-count {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.exam-select-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 /* ═══════════════════════════════════════════════════════
    TAB 2 — TRAINER
    ═══════════════════════════════════════════════════════ */
@@ -1775,6 +1977,33 @@ main {
   }
 
   .exam-card-actions .btn { flex: 1; min-width: 80px; justify-content: center; }
+
+  .folder-body { padding: 0 0.5rem 0.5rem; }
+
+  /* Thumb-sized targets — rename sits right next to delete. */
+  .folder-toggle { min-height: 44px; }
+
+  .folder-actions .btn-icon,
+  .exam-select-head .btn-icon {
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Unlike the submit bars, this one acts on the cards you are tapping, so it
+     stays pinned instead of flowing to the end of the page. */
+  .bottom-bar.exam-select-bar {
+    position: fixed;
+    margin-top: 0;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .exam-select-head { justify-content: space-between; }
+
+  .exam-select-actions .btn { flex: 1; min-width: 7rem; justify-content: center; }
 
   /* ── Trainer tab ─────────────────────────────────── */
 

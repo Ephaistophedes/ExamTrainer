@@ -77,6 +77,7 @@ function hideAlert(id) {
 
 const KEYS = {
   examBank:    'examBank',
+  examFolders: 'examFolders',
   examHistory: 'examHistory',
   activeExam:  'activeExamId',
   editorDraft: 'editorDraft',
@@ -109,6 +110,18 @@ function loadExams() {
 
 function saveExams(exams) {
   saveJSON(KEYS.examBank, exams);
+  emitStateChange();
+}
+
+// Folders group the exam list. Membership lives on the exam (exam.folderId),
+// so an exam can never outlive its folder reference — a folderId that no
+// longer resolves simply reads as ungrouped.
+function loadFolders() {
+  return loadJSON(KEYS.examFolders, []);
+}
+
+function saveFolders(folders) {
+  saveJSON(KEYS.examFolders, folders);
   emitStateChange();
 }
 
@@ -160,6 +173,7 @@ function exportAppState() {
     exportedAt: new Date().toISOString(),
     data: {
       examBank:    loadExams(),
+      examFolders: loadFolders(),
       examHistory: loadHistory(),
       verseBank:   loadVerses(),
       activeExamId: getActiveExamId(),
@@ -183,6 +197,8 @@ function importAppState(backup) {
 
   // Write through the normal storage layer so listeners fire as expected.
   saveExams(d.examBank);
+  // Backups predating folders have no list; their exams restore as ungrouped.
+  saveFolders(Array.isArray(d.examFolders) ? d.examFolders : []);
   saveHistory(Array.isArray(d.examHistory) ? d.examHistory : []);
   saveVerses(Array.isArray(d.verseBank) ? d.verseBank : []);
   if (d.activeExamId && d.examBank.some(function (e) { return e.id === d.activeExamId; })) {
@@ -218,6 +234,10 @@ window.ExamTrainerState = {
 
 function generateExamId() {
   return 'exam_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+function generateFolderId() {
+  return 'folder_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
 }
 
 let _qidSeq = Date.now() + Math.floor(Math.random() * 1e9);
@@ -301,6 +321,10 @@ tabBtns.forEach(function (btn) {
       b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
     });
 
+    // The selection bar is fixed to the viewport, so it must not outlive the
+    // tab it belongs to.
+    if (target !== 'exams') exitSelectionMode();
+
     tabSections.forEach(function (s) { s.classList.remove('active'); });
     $('tab-' + target).classList.add('active');
 
@@ -336,57 +360,132 @@ window.addEventListener('resize', updateTabNavTop);
 
 function renderExamList() {
   const exams    = loadExams();
+  const folders  = loadFolders();
   const activeId = getActiveExamId();
   const history  = loadHistory();
   const list     = $('exam-list');
   const noExams  = $('no-exams');
 
   list.innerHTML = '';
+  list.classList.toggle('selecting', _examSelection !== null);
 
-  if (exams.length === 0) {
+  if (exams.length === 0 && folders.length === 0) {
     noExams.classList.remove('hidden');
     return;
   }
 
   noExams.classList.add('hidden');
 
+  const ctx = { activeId: activeId, history: history };
+
+  // Grouped first, then whatever isn't filed. An exam pointing at a folder
+  // that no longer exists counts as unfiled rather than disappearing.
+  const known  = new Set(folders.map(function (f) { return f.id; }));
+  const byFolder = {};
+  const loose  = [];
   exams.forEach(function (exam) {
-    const isActive    = exam.id === activeId;
-    const attempts    = history.filter(function (a) { return a.examId === exam.id; });
-    const lastAttempt = attempts[attempts.length - 1];
-    const lastScore   = lastAttempt
-      ? 'Last: ' + lastAttempt.percent + '%'
-      : 'No attempts yet';
-
-    const card = document.createElement('div');
-    card.className = 'exam-card' + (isActive ? ' active-exam' : '');
-
-    card.innerHTML =
-      '<div class="exam-card-info">' +
-        '<div class="exam-card-name">' + esc(exam.name) + '</div>' +
-        '<div class="exam-card-meta">' +
-          '<span>' + pluralize(exam.questions.length, 'question') + '</span>' +
-          '<span>' + lastScore + '</span>' +
-        '</div>' +
-      '</div>' +
-      (isActive ? '<span class="active-badge">Active</span>' : '') +
-      '<div class="exam-card-actions">' +
-        (!isActive
-          ? '<button class="btn btn-primary" data-action="activate" data-id="' + esc(exam.id) + '">Set Active</button>'
-          : ''
-        ) +
-        '<button class="btn btn-secondary" data-action="edit" data-id="' + esc(exam.id) + '">Edit</button>' +
-        '<button class="btn btn-ghost" data-action="delete" data-id="' + esc(exam.id) + '">Delete</button>' +
-      '</div>';
-
-    card.querySelectorAll('[data-action]').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        handleExamAction(btn.dataset.action, btn.dataset.id);
-      });
-    });
-
-    list.appendChild(card);
+    if (exam.folderId && known.has(exam.folderId)) {
+      (byFolder[exam.folderId] = byFolder[exam.folderId] || []).push(exam);
+    } else {
+      loose.push(exam);
+    }
   });
+
+  folders.forEach(function (folder) {
+    list.appendChild(buildFolderSection(folder, byFolder[folder.id] || [], ctx));
+  });
+
+  loose.forEach(function (exam) {
+    list.appendChild(buildExamCard(exam, ctx));
+  });
+
+  updateExamSelectBar();
+}
+
+/** One collapsible folder: a header that toggles it, and its exam cards. */
+function buildFolderSection(folder, exams, ctx) {
+  const section = document.createElement('div');
+  section.className = 'exam-folder' + (folder.collapsed ? ' collapsed' : '');
+  section.dataset.folderId = folder.id;
+
+  const header = document.createElement('div');
+  header.className = 'folder-header';
+  header.innerHTML =
+    '<button type="button" class="folder-toggle" aria-expanded="' + (folder.collapsed ? 'false' : 'true') + '">' +
+      '<span class="folder-chevron" aria-hidden="true">▸</span>' +
+      '<span class="folder-name">' + esc(folder.name) + '</span>' +
+      '<span class="folder-count">' + pluralize(exams.length, 'exam') + '</span>' +
+    '</button>' +
+    '<div class="folder-actions">' +
+      '<button type="button" class="btn-icon" data-folder-action="rename"' +
+        ' title="Rename folder" aria-label="Rename folder ' + esc(folder.name) + '">✎</button>' +
+      '<button type="button" class="btn-icon" data-folder-action="delete"' +
+        ' title="Delete folder" aria-label="Delete folder ' + esc(folder.name) + '">✕</button>' +
+    '</div>';
+
+  header.querySelector('.folder-toggle').addEventListener('click', function () {
+    toggleFolder(folder.id);
+  });
+  header.querySelectorAll('[data-folder-action]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.dataset.folderAction === 'rename') promptRenameFolder(folder.id);
+      else deleteFolder(folder.id);
+    });
+  });
+
+  const body = document.createElement('div');
+  body.className = 'folder-body';
+
+  if (exams.length === 0) {
+    body.innerHTML = '<div class="folder-empty">No exams in here yet.</div>';
+  } else {
+    exams.forEach(function (exam) { body.appendChild(buildExamCard(exam, ctx)); });
+  }
+
+  section.appendChild(header);
+  section.appendChild(body);
+  return section;
+}
+
+function buildExamCard(exam, ctx) {
+  const isActive    = exam.id === ctx.activeId;
+  const attempts    = ctx.history.filter(function (a) { return a.examId === exam.id; });
+  const lastAttempt = attempts[attempts.length - 1];
+  const lastScore   = lastAttempt
+    ? 'Last: ' + lastAttempt.percent + '%'
+    : 'No attempts yet';
+  const selected = _examSelection !== null && _examSelection.has(exam.id);
+
+  const card = document.createElement('div');
+  card.className = 'exam-card' + (isActive ? ' active-exam' : '') + (selected ? ' selected' : '');
+  card.dataset.examId = exam.id;
+
+  card.innerHTML =
+    '<span class="exam-check" aria-hidden="true">✓</span>' +
+    '<div class="exam-card-info">' +
+      '<div class="exam-card-name">' + esc(exam.name) + '</div>' +
+      '<div class="exam-card-meta">' +
+        '<span>' + pluralize(exam.questions.length, 'question') + '</span>' +
+        '<span>' + lastScore + '</span>' +
+      '</div>' +
+    '</div>' +
+    (isActive ? '<span class="active-badge">Active</span>' : '') +
+    '<div class="exam-card-actions">' +
+      (!isActive
+        ? '<button class="btn btn-primary" data-action="activate" data-id="' + esc(exam.id) + '">Set Active</button>'
+        : ''
+      ) +
+      '<button class="btn btn-secondary" data-action="edit" data-id="' + esc(exam.id) + '">Edit</button>' +
+      '<button class="btn btn-ghost" data-action="delete" data-id="' + esc(exam.id) + '">Delete</button>' +
+    '</div>';
+
+  card.querySelectorAll('[data-action]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      handleExamAction(btn.dataset.action, btn.dataset.id);
+    });
+  });
+
+  return card;
 }
 
 function handleExamAction(action, id) {
@@ -412,6 +511,375 @@ function handleExamAction(action, id) {
     });
   }
 }
+
+/* ─── Folders ───────────────────────────────────────── */
+
+function toggleFolder(id) {
+  const folders = loadFolders();
+  const folder  = folders.find(function (f) { return f.id === id; });
+  if (!folder) return;
+  folder.collapsed = !folder.collapsed;
+  saveFolders(folders);
+  renderExamList();
+}
+
+/** Append a folder and hand back its id, so callers can fill it. */
+function addFolder(name) {
+  const folders = loadFolders();
+  const folder  = {
+    id:        generateFolderId(),
+    name:      name,
+    created:   new Date().toISOString().slice(0, 10),
+    collapsed: false,
+  };
+  folders.push(folder);
+  saveFolders(folders);
+  return folder.id;
+}
+
+function promptNewFolder(onCreated) {
+  openFolderNameModal({
+    title:     'New Folder',
+    saveLabel: 'Create',
+    value:     '',
+    onSave:    function (name) { onCreated(addFolder(name)); },
+  });
+}
+
+function promptRenameFolder(id) {
+  const folder = loadFolders().find(function (f) { return f.id === id; });
+  if (!folder) return;
+
+  openFolderNameModal({
+    title:     'Rename Folder',
+    saveLabel: 'Save',
+    value:     folder.name,
+    onSave:    function (name) {
+      const folders = loadFolders();
+      const target  = folders.find(function (f) { return f.id === id; });
+      if (!target) return;
+      target.name = name;
+      saveFolders(folders);
+      renderExamList();
+    },
+  });
+}
+
+// Deleting a folder is only ever a regrouping: its exams move out, they are
+// never removed with it.
+function deleteFolder(id) {
+  const folder = loadFolders().find(function (f) { return f.id === id; });
+  if (!folder) return;
+
+  const count = loadExams().filter(function (e) { return e.folderId === id; }).length;
+  const tail  = count === 0
+    ? ''
+    : ' The ' + pluralize(count, 'exam') + ' inside will move out of the folder, not be deleted.';
+
+  showConfirm('Delete folder "' + folder.name + '"?' + tail, 'Delete', function () {
+    saveExams(loadExams().map(function (e) {
+      return e.folderId === id ? { ...e, folderId: null } : e;
+    }));
+    saveFolders(loadFolders().filter(function (f) { return f.id !== id; }));
+    renderExamList();
+  });
+}
+
+$('btn-create-folder').addEventListener('click', function () {
+  promptNewFolder(function () { renderExamList(); });
+});
+
+/* ─── Folder name modal (create + rename) ───────────── */
+
+let _folderNameCallback = null;
+
+function openFolderNameModal(opts) {
+  _folderNameCallback = opts.onSave;
+  $('folder-name-title').textContent      = opts.title;
+  $('btn-folder-name-save').textContent   = opts.saveLabel || 'Save';
+
+  const input = $('folder-name-input');
+  input.value = opts.value || '';
+  syncFolderNameSave();
+
+  BackStack.push('modal-folder-name', closeFolderNameModal);
+  $('folder-name-modal').classList.remove('hidden');
+
+  // Same rule as the editor: don't force the keyboard open on touch.
+  if (!('ontouchstart' in window)) input.select();
+}
+
+function closeFolderNameModal() {
+  BackStack.release('modal-folder-name');
+  $('folder-name-modal').classList.add('hidden');
+  _folderNameCallback = null;
+}
+
+function syncFolderNameSave() {
+  $('btn-folder-name-save').disabled = $('folder-name-input').value.trim() === '';
+}
+
+function submitFolderName() {
+  const name = $('folder-name-input').value.trim();
+  if (!name) return;
+  // closeFolderNameModal clears the callback, so hold onto it first.
+  const callback = _folderNameCallback;
+  closeFolderNameModal();
+  if (typeof callback === 'function') callback(name);
+}
+
+$('folder-name-input').addEventListener('input', syncFolderNameSave);
+$('folder-name-input').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') submitFolderName();
+});
+$('btn-folder-name-save').addEventListener('click', submitFolderName);
+$('btn-folder-name-cancel').addEventListener('click', closeFolderNameModal);
+$('folder-name-close').addEventListener('click', closeFolderNameModal);
+$('folder-name-backdrop').addEventListener('click', closeFolderNameModal);
+
+/* ─── Folder picker modal ───────────────────────────── */
+
+function openFolderPickModal(onPick) {
+  const folders = loadFolders();
+  const exams   = loadExams();
+  const list    = $('folder-pick-list');
+  list.innerHTML = '';
+
+  folders.forEach(function (folder) {
+    const btn = document.createElement('button');
+    btn.type      = 'button';
+    btn.className = 'folder-pick-item';
+    btn.innerHTML =
+      '<span class="folder-pick-name">' + esc(folder.name) + '</span>' +
+      '<span class="folder-pick-count">' +
+        pluralize(exams.filter(function (e) { return e.folderId === folder.id; }).length, 'exam') +
+      '</span>';
+    btn.addEventListener('click', function () {
+      closeFolderPickModal();
+      onPick(folder.id);
+    });
+    list.appendChild(btn);
+  });
+
+  BackStack.push('modal-folder-pick', closeFolderPickModal);
+  $('folder-pick-modal').classList.remove('hidden');
+}
+
+function closeFolderPickModal() {
+  BackStack.release('modal-folder-pick');
+  $('folder-pick-modal').classList.add('hidden');
+}
+
+$('btn-folder-pick-cancel').addEventListener('click', closeFolderPickModal);
+$('folder-pick-close').addEventListener('click', closeFolderPickModal);
+$('folder-pick-backdrop').addEventListener('click', closeFolderPickModal);
+
+/* ─── Selection mode ────────────────────────────────── */
+
+// A Set of exam ids while selection mode is on, null when it is off.
+let _examSelection = null;
+
+function enterSelectionMode(firstId) {
+  if (_examSelection) return;
+  _examSelection = new Set();
+  if (firstId) _examSelection.add(firstId);
+  BackStack.push('exam-selection', exitSelectionMode);
+  renderExamList();
+}
+
+function exitSelectionMode() {
+  if (!_examSelection) return;
+  _examSelection = null;
+  BackStack.release('exam-selection');
+  renderExamList();
+}
+
+function toggleExamSelected(id) {
+  if (!_examSelection) return;
+  if (_examSelection.has(id)) _examSelection.delete(id);
+  else _examSelection.add(id);
+
+  // Repainting one card beats re-rendering the list, which would lose the
+  // scroll position mid-selection.
+  $('exam-list').querySelectorAll('.exam-card').forEach(function (card) {
+    if (card.dataset.examId === id) card.classList.toggle('selected', _examSelection.has(id));
+  });
+  updateExamSelectBar();
+}
+
+function updateExamSelectBar() {
+  const bar = $('exam-select-bar');
+  if (!_examSelection) {
+    bar.classList.add('hidden');
+    return;
+  }
+
+  const none = _examSelection.size === 0;
+  $('exam-select-count').textContent = _examSelection.size + ' selected';
+  $('btn-sel-new-folder').disabled    = none;
+  $('btn-sel-add-folder').disabled    = none || loadFolders().length === 0;
+  $('btn-sel-remove-folder').disabled = none;
+  $('btn-sel-delete').disabled        = none;
+  bar.classList.remove('hidden');
+
+  // The bar wraps to as many rows as the buttons need, so the list has to be
+  // told how much room to leave under the last card (cf. updateTabNavTop).
+  document.documentElement.style.setProperty('--exam-select-bar-h', bar.offsetHeight + 'px');
+}
+
+/** File every selected exam under `folderId` (null moves them out). */
+function assignSelectionToFolder(folderId) {
+  if (!_examSelection || _examSelection.size === 0) return;
+  const ids = new Set(_examSelection);
+
+  saveExams(loadExams().map(function (e) {
+    return ids.has(e.id) ? { ...e, folderId: folderId } : e;
+  }));
+  exitSelectionMode(); // re-renders
+}
+
+$('btn-sel-new-folder').addEventListener('click', function () {
+  if (!_examSelection || _examSelection.size === 0) return;
+  promptNewFolder(function (folderId) { assignSelectionToFolder(folderId); });
+});
+
+$('btn-sel-add-folder').addEventListener('click', function () {
+  if (!_examSelection || _examSelection.size === 0) return;
+  openFolderPickModal(function (folderId) { assignSelectionToFolder(folderId); });
+});
+
+$('btn-sel-remove-folder').addEventListener('click', function () {
+  assignSelectionToFolder(null);
+});
+
+$('btn-sel-delete').addEventListener('click', function () {
+  if (!_examSelection || _examSelection.size === 0) return;
+  const ids = new Set(_examSelection);
+
+  showConfirm('Delete ' + pluralize(ids.size, 'exam') + '? This cannot be undone.', 'Delete', function () {
+    saveExams(loadExams().filter(function (e) { return !ids.has(e.id); }));
+    if (ids.has(getActiveExamId())) {
+      localStorage.removeItem(KEYS.activeExam);
+      renderTrainer();
+    }
+    exitSelectionMode();
+  });
+});
+
+$('btn-sel-cancel').addEventListener('click', exitSelectionMode);
+
+/*
+ * Press and hold an exam card to start selecting, then tap the rest. Mirrors
+ * the verse picker's long press (initVerseSelectDrag): a finger that travels
+ * is scrolling, so it cancels the press rather than selecting.
+ */
+(function initExamSelectPress() {
+  const list = $('exam-list');
+
+  const LONG_PRESS_MS = 350;
+  const TOUCH_SLOP    = 10; // px of travel that counts as a scroll instead
+
+  let pressCard    = null;
+  let pressTimer   = null;
+  let anchorX      = 0;
+  let anchorY      = 0;
+  let pressFired   = false; // the press opened selection mode; eat its click
+
+  function cardAt(target) {
+    const card = target.closest ? target.closest('.exam-card') : null;
+    return (card && list.contains(card)) ? card : null;
+  }
+
+  function startPress(card, x, y) {
+    pressCard = card;
+    anchorX   = x;
+    anchorY   = y;
+    card.classList.add('press-arming');
+    pressTimer = setTimeout(function () {
+      pressTimer = null;
+      card.classList.remove('press-arming');
+      pressFired = true;
+      enterSelectionMode(card.dataset.examId);
+    }, LONG_PRESS_MS);
+  }
+
+  function cancelPress() {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+    if (pressCard) pressCard.classList.remove('press-arming');
+    pressCard = null;
+  }
+
+  function movedTooFar(x, y) {
+    return Math.abs(x - anchorX) > TOUCH_SLOP || Math.abs(y - anchorY) > TOUCH_SLOP;
+  }
+
+  /* — Mouse — */
+
+  list.addEventListener('mousedown', function (e) {
+    if (e.button !== 0 || _examSelection) return;
+    const card = cardAt(e.target);
+    if (card) startPress(card, e.clientX, e.clientY);
+  });
+
+  document.addEventListener('mousemove', function (e) {
+    if (pressCard && movedTooFar(e.clientX, e.clientY)) cancelPress();
+  });
+
+  document.addEventListener('mouseup', function () {
+    cancelPress();
+    // Cleared only after the trailing click has fired, so the press that
+    // opened selection mode can't also run a card action.
+    if (pressFired) setTimeout(function () { pressFired = false; }, 0);
+  });
+
+  /* — Touch — */
+
+  list.addEventListener('touchstart', function (e) {
+    if (e.touches.length !== 1 || _examSelection) return;
+    const card = cardAt(e.target);
+    if (card) startPress(card, e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+
+  list.addEventListener('touchmove', function (e) {
+    const t = e.touches[0];
+    if (pressCard && movedTooFar(t.clientX, t.clientY)) cancelPress();
+  }, { passive: true });
+
+  list.addEventListener('touchend', function (e) {
+    if (pressFired) {
+      pressFired = false;
+      e.preventDefault(); // no synthetic click, so the press only selects
+    }
+    cancelPress();
+  }, { passive: false });
+
+  list.addEventListener('touchcancel', cancelPress);
+
+  // A held card must not raise the text-selection / context menu instead.
+  list.addEventListener('contextmenu', function (e) {
+    if (pressCard || _examSelection) e.preventDefault();
+  });
+
+  // Capture, so in selection mode a tap anywhere on a card toggles it and
+  // never reaches the card's own Set Active / Edit / Delete buttons.
+  list.addEventListener('click', function (e) {
+    if (pressFired) {
+      pressFired = false;
+      e.stopPropagation();
+      e.preventDefault();
+      return;
+    }
+    if (!_examSelection) return;
+    const card = cardAt(e.target);
+    if (!card) return; // folder headers stay usable while selecting
+    e.stopPropagation();
+    e.preventDefault();
+    toggleExamSelected(card.dataset.examId);
+  }, true);
+})();
 
 /* ─── JSON Import ───────────────────────────────────── */
 
