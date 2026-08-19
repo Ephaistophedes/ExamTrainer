@@ -3130,6 +3130,73 @@ function generateVerseId() {
   return 'verse_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
 }
 
+/* ─── Verse Titles ─────────────────────────────────── */
+
+/** Split "RV 9:1" into { prefix: 'RV 9:', num: 1 }; a bare "21" has no prefix. */
+function splitRef(ref) {
+  const trimmed = (ref || '').trim();
+  const m = /^(.*?)(\d+)\s*$/.exec(trimmed);
+  if (!m) return { prefix: trimmed, num: null };
+  return { prefix: m[1].trim(), num: Number(m[2]) };
+}
+
+/**
+ * Condense references for display, so a whole chapter reads "RV 9:1–21"
+ * instead of listing all twenty-one verses, and a scattered selection reads
+ * "RV 9:1–5, 9". Anything with more gaps than that is shown as a span.
+ */
+function condenseRefs(refs) {
+  if (refs.length <= 1) return refs[0] || '';
+
+  // Group the references into runs of consecutive verses. Later verses either
+  // repeat the book and chapter ("RV 9:2") or just number themselves ("2"),
+  // so an empty prefix carries on from the run before it.
+  const runs = [];
+  refs.map(splitRef).forEach(function (p, i) {
+    const run = runs[runs.length - 1];
+    const continues = run && run.end !== null && p.num === run.end + 1 &&
+      (!p.prefix || p.prefix === run.prefix);
+    if (continues) {
+      run.end = p.num;
+    } else {
+      runs.push({
+        prefix: p.prefix || (run ? run.prefix : ''),
+        start:  p.num,
+        end:    p.num,
+        label:  refs[i],
+      });
+    }
+  });
+
+  if (runs.length > 4) return refs[0] + ' … ' + refs[refs.length - 1];
+
+  return runs.map(function (run, i) {
+    // Only the first run needs to name the book and chapter; the rest are
+    // just verse numbers, unless they come from somewhere else entirely.
+    const head = (i === 0 || run.start === null || run.prefix !== runs[0].prefix)
+      ? run.label
+      : String(run.start);
+    return run.end > run.start ? head + '–' + run.end : head;
+  }).join(', ');
+}
+
+/** The title an entry takes from its own references, or '' when it has none. */
+function autoVerseTitle(items) {
+  const refs = items.map(function (it) { return it.ref; }).filter(Boolean);
+  return refs.length ? condenseRefs(refs) : '';
+}
+
+/**
+ * The title to show for an entry: the one it was given, else one built from
+ * its references — rebuilt on the fly, so entries saved before titles existed
+ * collapse their listed-out references into a range too.
+ */
+function verseTitle(v) {
+  const own = (v.title || '').trim();
+  if (v.titleAuto === false && own) return own;
+  return autoVerseTitle(normalizeVerseEntry(v)) || own || 'Verse';
+}
+
 /* ─── Verse List Rendering ─────────────────────────── */
 
 function renderVerseList() {
@@ -3153,13 +3220,22 @@ function renderVerseList() {
     const wordCount = items.reduce(function (sum, it) {
       return sum + it.text.split(/\s+/).filter(Boolean).length;
     }, 0);
-    const meta = (items.length > 1
-      ? '<span>' + pluralize(items.length, 'verse') + '</span><span>· '
-      : '<span>') + pluralize(wordCount, 'word') + '</span>';
+    const title = verseTitle(v);
+    const range = autoVerseTitle(items);
+
+    // The reference range only earns a place in the meta line when the entry
+    // carries a title of its own — otherwise it already *is* the title.
+    const bits = [];
+    if (range && range !== title) bits.push(range);
+    if (items.length > 1) bits.push(pluralize(items.length, 'verse'));
+    bits.push(pluralize(wordCount, 'word'));
+    const meta = bits.map(function (bit, i) {
+      return '<span>' + (i ? '· ' : '') + esc(bit) + '</span>';
+    }).join('');
 
     card.innerHTML =
       '<div class="exam-card-info">' +
-        '<div class="exam-card-name">' + esc(v.title) + '</div>' +
+        '<div class="exam-card-name">' + esc(title) + '</div>' +
         '<div class="exam-card-meta">' + meta + '</div>' +
       '</div>' +
       '<div class="exam-card-actions">' +
@@ -3186,7 +3262,7 @@ $('verse-list').addEventListener('click', function (e) {
   } else if (btn.dataset.verseDelete) {
     const id = btn.dataset.verseDelete;
     const v  = loadVerses().find(function (v) { return v.id === id; });
-    const name = v ? '"' + v.title + '"' : 'this verse';
+    const name = v ? '"' + verseTitle(v) + '"' : 'this verse';
     showConfirm('Delete ' + name + '? This cannot be undone.', 'Delete', function () {
       const verses = loadVerses().filter(function (v) { return v.id !== id; });
       saveVerses(verses);
@@ -3296,7 +3372,7 @@ function validateVerseImport(data) {
 /** Title for an imported entry: its references, else the file name, else a number. */
 function importVerseTitle(items, fileName) {
   const refs = items.map(function (it) { return it.ref; }).filter(Boolean);
-  if (refs.length) return refs.join(', ');
+  if (refs.length) return condenseRefs(refs);
   const fromName = (fileName || '').replace(/\.json$/i, '').replace(/[-_]/g, ' ').trim();
   if (fromName) return fromName;
   return 'Verse ' + nextVerseNumber();
@@ -3367,7 +3443,7 @@ function openVerseExportModal() {
     const info = document.createElement('div');
     info.className = 'export-exam-item-info';
     info.innerHTML =
-      '<div class="export-exam-item-name">' + esc(v.title) + '</div>' +
+      '<div class="export-exam-item-name">' + esc(verseTitle(v)) + '</div>' +
       '<div class="export-exam-item-meta">' + pluralize(items.length, 'verse') + '</div>';
 
     item.appendChild(cb);
@@ -3431,7 +3507,7 @@ $('btn-verse-do-export').addEventListener('click', async function () {
     try {
       for (const v of selected) {
         const payload = verseExportPayload(v);
-        const fileName = v.title.replace(/[<>:"/\\|?*]/g, '_') + '.json';
+        const fileName = verseTitle(v).replace(/[<>:"/\\|?*]/g, '_') + '.json';
         const fileHandle = await verseExportFolderHandle.getFileHandle(fileName, { create: true });
         const writable = await fileHandle.createWritable();
         await writable.write(JSON.stringify(payload, null, 2));
@@ -3451,7 +3527,7 @@ $('btn-verse-do-export').addEventListener('click', async function () {
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href     = url;
-      a.download = v.title.replace(/[<>:"/\\|?*]/g, '_') + '.json';
+      a.download = verseTitle(v).replace(/[<>:"/\\|?*]/g, '_') + '.json';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -3516,7 +3592,28 @@ function renumberVerseRows() {
     row.querySelector('.editor-q-label').textContent = 'Verse ' + (i + 1);
     row.querySelector('.btn-remove-verse').style.visibility = rows.length > 1 ? '' : 'hidden';
   });
+  refreshVerseTitlePlaceholder();
 }
+
+/**
+ * The title box is optional, so spell out what leaving it empty gives: the
+ * entry's references, condensed the way the verse list shows them.
+ */
+function refreshVerseTitlePlaceholder() {
+  const refs = [];
+  $('verse-ed-list').querySelectorAll('.verse-ed-ref').forEach(function (input) {
+    const ref = input.value.trim();
+    if (ref) refs.push(ref);
+  });
+  const auto = condenseRefs(refs);
+  $('verse-ed-title').placeholder = auto
+    ? 'Optional — defaults to "' + auto + '"'
+    : 'Optional — e.g. Revelation 9';
+}
+
+$('verse-ed-list').addEventListener('input', function (e) {
+  if (e.target.classList.contains('verse-ed-ref')) refreshVerseTitlePlaceholder();
+});
 
 function renderVerseEditorRows(items) {
   const list = $('verse-ed-list');
@@ -3625,8 +3722,10 @@ function openVerseEditor(verseId) {
   if (verseId) {
     const v = loadVerses().find(function (v) { return v.id === verseId; });
     if (!v) return;
+    $('verse-ed-title').value = v.titleAuto === false ? (v.title || '') : '';
     renderVerseEditorRows(normalizeVerseEntry(v));
   } else {
+    $('verse-ed-title').value = '';
     renderVerseEditorRows([blankVerseItem()]);
   }
 
@@ -3647,11 +3746,12 @@ function nextVerseNumber() {
   return max + 1;
 }
 
-/** Auto-title an entry: use its references if any, else keep/assign a number. */
+/** Title an entry that has none of its own: its references, else a number. */
 function deriveVerseTitle(items, existingTitle) {
-  const refs = items.map(function (it) { return it.ref; }).filter(Boolean);
-  if (refs.length) return refs.join(', ');
-  if (existingTitle && /^Verse \d+$/.test(existingTitle)) return existingTitle;
+  const auto = autoVerseTitle(items);
+  if (auto) return auto;
+  const existing = (existingTitle || '').trim();
+  if (existing) return existing;  // e.g. one taken from an imported file name
   return 'Verse ' + nextVerseNumber();
 }
 
@@ -3678,22 +3778,30 @@ $('btn-save-verse').addEventListener('click', function () {
     return;
   }
 
+  const typedTitle = $('verse-ed-title').value.trim();
   const verses = loadVerses();
 
   if (_editingVerseId) {
     const idx = verses.findIndex(function (v) { return v.id === _editingVerseId; });
     if (idx !== -1) {
-      verses[idx].title  = deriveVerseTitle(items, verses[idx].title);
+      // Clearing the box goes back to the references. An entry that was
+      // already auto-titled keeps its old title as the fallback (an imported
+      // file name, say); a title the user typed is dropped, as intended.
+      const wasAuto = verses[idx].titleAuto !== false;
+      verses[idx].title = typedTitle ||
+        deriveVerseTitle(items, wasAuto ? verses[idx].title : null);
+      verses[idx].titleAuto = !typedTitle;
       verses[idx].verses = items;
       delete verses[idx].text;   // drop legacy single-text field
       delete verses[idx].blanks; // drop legacy manual blanks
     }
   } else {
     verses.push({
-      id:      generateVerseId(),
-      title:   deriveVerseTitle(items, null),
-      verses:  items,
-      created: new Date().toISOString(),
+      id:        generateVerseId(),
+      title:     typedTitle || deriveVerseTitle(items, null),
+      titleAuto: !typedTitle,
+      verses:    items,
+      created:   new Date().toISOString(),
     });
   }
 
@@ -3787,7 +3895,7 @@ function openVerseSelect(entry, items) {
   $('verse-list-view').classList.add('hidden');
   $('verse-practice-view').classList.add('hidden');
   $('verse-select-view').classList.remove('hidden');
-  $('verse-select-title').textContent = entry.title;
+  $('verse-select-title').textContent = verseTitle(entry);
 
   // Restore the last selection made for this entry, if any; otherwise start
   // with everything selected, so "Practice selected" is the whole passage.
@@ -4062,7 +4170,7 @@ function loadVerseSession() {
   _verseModel = buildVerseModel(combinedText);
 
   $('verse-practice-title').textContent = _verseEntry
-    ? _verseEntry.title
+    ? verseTitle(_verseEntry)
     : (_verseQueue[0] && _verseQueue[0].ref) || 'Verse';
   $('verse-ref-text').textContent = combinedText;
 
@@ -4071,7 +4179,7 @@ function loadVerseSession() {
   const sub  = $('verse-practice-sub');
   let subText = '';
   if (refs.length) {
-    subText = refs.length > 1 ? refs[0] + ' – ' + refs[refs.length - 1] : refs[0];
+    subText = condenseRefs(refs);
   } else if (_verseQueue.length > 1) {
     subText = _verseQueue.length + ' verses';
   }

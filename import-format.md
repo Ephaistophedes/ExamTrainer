@@ -114,9 +114,13 @@ A verse file is a **top-level array** of verse objects. Each file becomes one ve
 
 ## Title behaviour
 
-- If any item has a `ref`, the entry is titled from those references (e.g. `"Psalm 23:1, Psalm 23:2"`).
+- If any item has a `ref`, the entry is titled from those references, condensed into a
+  range (e.g. `"Psalm 23:1–2"`, or `"RV 9:1–21"` for a whole chapter).
 - Otherwise the **file name** is used (e.g. `Psalm 23.json` → `"Psalm 23"`).
 - Otherwise it falls back to an auto-number (`"Verse 1"`, `"Verse 2"`, …).
+- Either way, the **Title** box in the verse editor gives the entry a name of your own
+  (e.g. `"The Fifth Trumpet"`), with the reference range shown beside it in the list.
+  Clearing that box goes back to the references.
 
 ## Convenience
 
