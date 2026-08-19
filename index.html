@@ -245,6 +245,7 @@
           <div class="exams-actions">
             <button id="btn-verse-import" class="btn btn-secondary">Import JSON</button>
             <button id="btn-verse-export" class="btn btn-secondary">Export</button>
+            <button id="btn-verse-create-folder" class="btn btn-secondary">+ Create Folder</button>
             <button id="btn-add-verse" class="btn btn-primary">+ Add Verse</button>
           </div>
         </div>
@@ -259,6 +260,20 @@
         <div id="no-verses" class="empty-state hidden">
           <div class="empty-icon">&#x1F4D6;</div>
           <p>No verses yet. Add a verse to start memorizing.</p>
+        </div>
+
+        <!-- Selection-mode action bar (position:fixed, shown only while selecting) -->
+        <div class="bottom-bar exam-select-bar hidden" id="verse-select-bar">
+          <div class="exam-select-head">
+            <span id="verse-select-bar-count" class="exam-select-count">0 selected</span>
+            <button id="btn-vsel-cancel" class="btn-icon" title="Cancel selection" aria-label="Cancel selection">&#x2715;</button>
+          </div>
+          <div class="exam-select-actions">
+            <button id="btn-vsel-new-folder" class="btn btn-primary">New folder&hellip;</button>
+            <button id="btn-vsel-add-folder" class="btn btn-secondary">Add to folder&hellip;</button>
+            <button id="btn-vsel-remove-folder" class="btn btn-secondary">Remove</button>
+            <button id="btn-vsel-delete" class="btn btn-danger">Delete</button>
+          </div>
         </div>
       </div>
 

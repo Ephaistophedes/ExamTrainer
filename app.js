@@ -82,6 +82,7 @@ const KEYS = {
   activeExam:  'activeExamId',
   editorDraft: 'editorDraft',
   verseBank:   'verseBank',
+  verseFolders: 'verseFolders',
   verseSelection: 'verseSelection',
 };
 
@@ -113,15 +114,24 @@ function saveExams(exams) {
   emitStateChange();
 }
 
-// Folders group the exam list. Membership lives on the exam (exam.folderId),
-// so an exam can never outlive its folder reference — a folderId that no
-// longer resolves simply reads as ungrouped.
-function loadFolders() {
+// Folders group a list into collapsible sections. Membership lives on the
+// item itself (exam.folderId / verse.folderId), so an item can never outlive
+// its folder reference — a folderId that no longer resolves reads as ungrouped.
+function loadExamFolders() {
   return loadJSON(KEYS.examFolders, []);
 }
 
-function saveFolders(folders) {
+function saveExamFolders(folders) {
   saveJSON(KEYS.examFolders, folders);
+  emitStateChange();
+}
+
+function loadVerseFolders() {
+  return loadJSON(KEYS.verseFolders, []);
+}
+
+function saveVerseFolders(folders) {
+  saveJSON(KEYS.verseFolders, folders);
   emitStateChange();
 }
 
@@ -173,9 +183,10 @@ function exportAppState() {
     exportedAt: new Date().toISOString(),
     data: {
       examBank:    loadExams(),
-      examFolders: loadFolders(),
+      examFolders: loadExamFolders(),
       examHistory: loadHistory(),
       verseBank:   loadVerses(),
+      verseFolders: loadVerseFolders(),
       activeExamId: getActiveExamId(),
     },
   };
@@ -197,10 +208,11 @@ function importAppState(backup) {
 
   // Write through the normal storage layer so listeners fire as expected.
   saveExams(d.examBank);
-  // Backups predating folders have no list; their exams restore as ungrouped.
-  saveFolders(Array.isArray(d.examFolders) ? d.examFolders : []);
+  // Backups predating folders have no list; their items restore as ungrouped.
+  saveExamFolders(Array.isArray(d.examFolders) ? d.examFolders : []);
   saveHistory(Array.isArray(d.examHistory) ? d.examHistory : []);
   saveVerses(Array.isArray(d.verseBank) ? d.verseBank : []);
+  saveVerseFolders(Array.isArray(d.verseFolders) ? d.verseFolders : []);
   if (d.activeExamId && d.examBank.some(function (e) { return e.id === d.activeExamId; })) {
     setActiveExamId(d.activeExamId);
   } else {
@@ -321,9 +333,10 @@ tabBtns.forEach(function (btn) {
       b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
     });
 
-    // The selection bar is fixed to the viewport, so it must not outlive the
+    // A selection bar is fixed to the viewport, so it must not outlive the
     // tab it belongs to.
-    if (target !== 'exams') exitSelectionMode();
+    if (target !== 'exams')  exitSelectionMode(EXAM_FOLDERS);
+    if (target !== 'verses') exitSelectionMode(VERSE_FOLDERS);
 
     tabSections.forEach(function (s) { s.classList.remove('active'); });
     $('tab-' + target).classList.add('active');
@@ -355,22 +368,502 @@ updateTabNavTop();
 window.addEventListener('resize', updateTabNavTop);
 
 /* ═══════════════════════════════════════════════════════
+   FOLDERS + SELECTION  (shared by the exam and verse lists)
+   ═══════════════════════════════════════════════════════ */
+
+/*
+ * The two foldered lists behave identically; they differ only in where they
+ * keep things, what they call their items, and which controls drive them.
+ * One descriptor per list is all the shared code below needs to serve both.
+ */
+const EXAM_FOLDERS = {
+  noun:    'exam',
+  listId:  'exam-list',
+  idKey:   'examId',          // dataset key holding the item id on its card
+  backKey: 'exam-selection',
+  barId:   'exam-select-bar',
+  countId: 'exam-select-count',
+  buttons: {
+    newFolder:    'btn-sel-new-folder',
+    addToFolder:  'btn-sel-add-folder',
+    removeFolder: 'btn-sel-remove-folder',
+    remove:       'btn-sel-delete',
+    cancel:       'btn-sel-cancel',
+  },
+  loadFolders: loadExamFolders,
+  saveFolders: saveExamFolders,
+  loadItems:   loadExams,
+  saveItems:   saveExams,
+  render:      function () { renderExamList(); },
+  // Deleting the active exam has to clear it, or the trainer goes on
+  // pointing at an exam that no longer exists.
+  afterDelete: function (ids) {
+    if (ids.has(getActiveExamId())) {
+      localStorage.removeItem(KEYS.activeExam);
+      renderTrainer();
+    }
+  },
+  selection: null,   // a Set of ids while selecting, null when not
+};
+
+const VERSE_FOLDERS = {
+  noun:    'verse',
+  listId:  'verse-list',
+  idKey:   'verseId',
+  backKey: 'verse-list-selection',
+  barId:   'verse-select-bar',
+  countId: 'verse-select-bar-count',
+  buttons: {
+    newFolder:    'btn-vsel-new-folder',
+    addToFolder:  'btn-vsel-add-folder',
+    removeFolder: 'btn-vsel-remove-folder',
+    remove:       'btn-vsel-delete',
+    cancel:       'btn-vsel-cancel',
+  },
+  loadFolders: loadVerseFolders,
+  saveFolders: saveVerseFolders,
+  loadItems:   loadVerses,
+  saveItems:   saveVerses,
+  render:      function () { renderVerseList(); },
+  // The picker remembers which verses inside an entry were last practised,
+  // which is meaningless once the entry itself is gone.
+  afterDelete: function (ids) {
+    ids.forEach(function (id) { removeVerseSelection(id); });
+  },
+  selection: null,
+};
+
+/* ─── Folders ───────────────────────────────────────── */
+
+function toggleFolder(kind, id) {
+  const folders = kind.loadFolders();
+  const folder  = folders.find(function (f) { return f.id === id; });
+  if (!folder) return;
+  folder.collapsed = !folder.collapsed;
+  kind.saveFolders(folders);
+  kind.render();
+}
+
+/** Append a folder and hand back its id, so callers can fill it. */
+function addFolder(kind, name) {
+  const folders = kind.loadFolders();
+  const folder  = {
+    id:        generateFolderId(),
+    name:      name,
+    created:   new Date().toISOString().slice(0, 10),
+    collapsed: false,
+  };
+  folders.push(folder);
+  kind.saveFolders(folders);
+  return folder.id;
+}
+
+function promptNewFolder(kind, onCreated) {
+  openFolderNameModal({
+    title:     'New Folder',
+    saveLabel: 'Create',
+    value:     '',
+    onSave:    function (name) { onCreated(addFolder(kind, name)); },
+  });
+}
+
+function promptRenameFolder(kind, id) {
+  const folder = kind.loadFolders().find(function (f) { return f.id === id; });
+  if (!folder) return;
+
+  openFolderNameModal({
+    title:     'Rename Folder',
+    saveLabel: 'Save',
+    value:     folder.name,
+    onSave:    function (name) {
+      const folders = kind.loadFolders();
+      const target  = folders.find(function (f) { return f.id === id; });
+      if (!target) return;
+      target.name = name;
+      kind.saveFolders(folders);
+      kind.render();
+    },
+  });
+}
+
+// Deleting a folder is only ever a regrouping: what is inside moves out, it
+// is never removed with the folder.
+function deleteFolder(kind, id) {
+  const folder = kind.loadFolders().find(function (f) { return f.id === id; });
+  if (!folder) return;
+
+  const count = kind.loadItems().filter(function (it) { return it.folderId === id; }).length;
+  const tail  = count === 0
+    ? ''
+    : ' The ' + pluralize(count, kind.noun) + ' inside will move out of the folder, not be deleted.';
+
+  showConfirm('Delete folder "' + folder.name + '"?' + tail, 'Delete', function () {
+    kind.saveItems(kind.loadItems().map(function (it) {
+      return it.folderId === id ? { ...it, folderId: null } : it;
+    }));
+    kind.saveFolders(kind.loadFolders().filter(function (f) { return f.id !== id; }));
+    kind.render();
+  });
+}
+
+/** One collapsible folder: a header that toggles it, and the cards inside. */
+function buildFolderSection(kind, folder, items, buildCard) {
+  const section = document.createElement('div');
+  section.className = 'exam-folder' + (folder.collapsed ? ' collapsed' : '');
+  section.dataset.folderId = folder.id;
+
+  const header = document.createElement('div');
+  header.className = 'folder-header';
+  header.innerHTML =
+    '<button type="button" class="folder-toggle" aria-expanded="' + (folder.collapsed ? 'false' : 'true') + '">' +
+      '<span class="folder-chevron" aria-hidden="true">▸</span>' +
+      '<span class="folder-name">' + esc(folder.name) + '</span>' +
+      '<span class="folder-count">' + pluralize(items.length, kind.noun) + '</span>' +
+    '</button>' +
+    '<div class="folder-actions">' +
+      '<button type="button" class="btn-icon" data-folder-action="rename"' +
+        ' title="Rename folder" aria-label="Rename folder ' + esc(folder.name) + '">✎</button>' +
+      '<button type="button" class="btn-icon" data-folder-action="delete"' +
+        ' title="Delete folder" aria-label="Delete folder ' + esc(folder.name) + '">✕</button>' +
+    '</div>';
+
+  header.querySelector('.folder-toggle').addEventListener('click', function () {
+    toggleFolder(kind, folder.id);
+  });
+  header.querySelectorAll('[data-folder-action]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.dataset.folderAction === 'rename') promptRenameFolder(kind, folder.id);
+      else deleteFolder(kind, folder.id);
+    });
+  });
+
+  const body = document.createElement('div');
+  body.className = 'folder-body';
+
+  if (items.length === 0) {
+    body.innerHTML = '<div class="folder-empty">No ' + kind.noun + 's in here yet.</div>';
+  } else {
+    items.forEach(function (item) { body.appendChild(buildCard(item)); });
+  }
+
+  section.appendChild(header);
+  section.appendChild(body);
+  return section;
+}
+
+/* ─── Folder name modal (create + rename) ───────────── */
+
+let _folderNameCallback = null;
+
+function openFolderNameModal(opts) {
+  _folderNameCallback = opts.onSave;
+  $('folder-name-title').textContent      = opts.title;
+  $('btn-folder-name-save').textContent   = opts.saveLabel || 'Save';
+
+  const input = $('folder-name-input');
+  input.value = opts.value || '';
+  syncFolderNameSave();
+
+  BackStack.push('modal-folder-name', closeFolderNameModal);
+  $('folder-name-modal').classList.remove('hidden');
+
+  // Same rule as the editor: don't force the keyboard open on touch.
+  if (!('ontouchstart' in window)) input.select();
+}
+
+function closeFolderNameModal() {
+  BackStack.release('modal-folder-name');
+  $('folder-name-modal').classList.add('hidden');
+  _folderNameCallback = null;
+}
+
+function syncFolderNameSave() {
+  $('btn-folder-name-save').disabled = $('folder-name-input').value.trim() === '';
+}
+
+function submitFolderName() {
+  const name = $('folder-name-input').value.trim();
+  if (!name) return;
+  // closeFolderNameModal clears the callback, so hold onto it first.
+  const callback = _folderNameCallback;
+  closeFolderNameModal();
+  if (typeof callback === 'function') callback(name);
+}
+
+$('folder-name-input').addEventListener('input', syncFolderNameSave);
+$('folder-name-input').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') submitFolderName();
+});
+$('btn-folder-name-save').addEventListener('click', submitFolderName);
+$('btn-folder-name-cancel').addEventListener('click', closeFolderNameModal);
+$('folder-name-close').addEventListener('click', closeFolderNameModal);
+$('folder-name-backdrop').addEventListener('click', closeFolderNameModal);
+
+/* ─── Folder picker modal ───────────────────────────── */
+
+function openFolderPickModal(kind, onPick) {
+  const folders = kind.loadFolders();
+  const items   = kind.loadItems();
+  const list    = $('folder-pick-list');
+  list.innerHTML = '';
+
+  folders.forEach(function (folder) {
+    const btn = document.createElement('button');
+    btn.type      = 'button';
+    btn.className = 'folder-pick-item';
+    btn.innerHTML =
+      '<span class="folder-pick-name">' + esc(folder.name) + '</span>' +
+      '<span class="folder-pick-count">' +
+        pluralize(items.filter(function (it) { return it.folderId === folder.id; }).length, kind.noun) +
+      '</span>';
+    btn.addEventListener('click', function () {
+      closeFolderPickModal();
+      onPick(folder.id);
+    });
+    list.appendChild(btn);
+  });
+
+  BackStack.push('modal-folder-pick', closeFolderPickModal);
+  $('folder-pick-modal').classList.remove('hidden');
+}
+
+function closeFolderPickModal() {
+  BackStack.release('modal-folder-pick');
+  $('folder-pick-modal').classList.add('hidden');
+}
+
+$('btn-folder-pick-cancel').addEventListener('click', closeFolderPickModal);
+$('folder-pick-close').addEventListener('click', closeFolderPickModal);
+$('folder-pick-backdrop').addEventListener('click', closeFolderPickModal);
+
+/* ─── Selection mode ────────────────────────────────── */
+
+function enterSelectionMode(kind, firstId) {
+  if (kind.selection) return;
+  kind.selection = new Set();
+  if (firstId) kind.selection.add(firstId);
+  BackStack.push(kind.backKey, function () { exitSelectionMode(kind); });
+  kind.render();
+}
+
+function exitSelectionMode(kind) {
+  if (!kind.selection) return;
+  kind.selection = null;
+  BackStack.release(kind.backKey);
+  kind.render();
+}
+
+function toggleItemSelected(kind, id) {
+  if (!kind.selection) return;
+  if (kind.selection.has(id)) kind.selection.delete(id);
+  else kind.selection.add(id);
+
+  // Repainting one card beats re-rendering the list, which would lose the
+  // scroll position mid-selection.
+  $(kind.listId).querySelectorAll('.exam-card').forEach(function (card) {
+    if (card.dataset[kind.idKey] === id) {
+      card.classList.toggle('selected', kind.selection.has(id));
+    }
+  });
+  updateSelectBar(kind);
+}
+
+function updateSelectBar(kind) {
+  const bar = $(kind.barId);
+  if (!kind.selection) {
+    bar.classList.add('hidden');
+    return;
+  }
+
+  const none = kind.selection.size === 0;
+  $(kind.countId).textContent = kind.selection.size + ' selected';
+  $(kind.buttons.newFolder).disabled    = none;
+  $(kind.buttons.addToFolder).disabled  = none || kind.loadFolders().length === 0;
+  $(kind.buttons.removeFolder).disabled = none;
+  $(kind.buttons.remove).disabled       = none;
+  bar.classList.remove('hidden');
+
+  // The bar wraps to as many rows as the buttons need, so the list has to be
+  // told how much room to leave under the last card (cf. updateTabNavTop).
+  document.documentElement.style.setProperty('--exam-select-bar-h', bar.offsetHeight + 'px');
+}
+
+/** File every selected item under `folderId` (null moves them out). */
+function assignSelectionToFolder(kind, folderId) {
+  if (!kind.selection || kind.selection.size === 0) return;
+  const ids = new Set(kind.selection);
+
+  kind.saveItems(kind.loadItems().map(function (it) {
+    return ids.has(it.id) ? { ...it, folderId: folderId } : it;
+  }));
+  exitSelectionMode(kind); // re-renders
+}
+
+function wireSelectBar(kind) {
+  $(kind.buttons.newFolder).addEventListener('click', function () {
+    if (!kind.selection || kind.selection.size === 0) return;
+    promptNewFolder(kind, function (folderId) { assignSelectionToFolder(kind, folderId); });
+  });
+
+  $(kind.buttons.addToFolder).addEventListener('click', function () {
+    if (!kind.selection || kind.selection.size === 0) return;
+    openFolderPickModal(kind, function (folderId) { assignSelectionToFolder(kind, folderId); });
+  });
+
+  $(kind.buttons.removeFolder).addEventListener('click', function () {
+    assignSelectionToFolder(kind, null);
+  });
+
+  $(kind.buttons.remove).addEventListener('click', function () {
+    if (!kind.selection || kind.selection.size === 0) return;
+    const ids = new Set(kind.selection);
+
+    showConfirm('Delete ' + pluralize(ids.size, kind.noun) + '? This cannot be undone.', 'Delete', function () {
+      kind.saveItems(kind.loadItems().filter(function (it) { return !ids.has(it.id); }));
+      if (kind.afterDelete) kind.afterDelete(ids);
+      exitSelectionMode(kind);
+    });
+  });
+
+  $(kind.buttons.cancel).addEventListener('click', function () { exitSelectionMode(kind); });
+}
+
+/*
+ * Press and hold a card to start selecting, then tap the rest. Mirrors the
+ * verse picker's long press (initVerseSelectDrag): a finger that travels is
+ * scrolling, so it cancels the press rather than selecting.
+ */
+function initSelectPress(kind) {
+  const list = $(kind.listId);
+
+  const LONG_PRESS_MS = 350;
+  const TOUCH_SLOP    = 10; // px of travel that counts as a scroll instead
+
+  let pressCard    = null;
+  let pressTimer   = null;
+  let anchorX      = 0;
+  let anchorY      = 0;
+  let pressFired   = false; // the press opened selection mode; eat its click
+
+  function cardAt(target) {
+    const card = target.closest ? target.closest('.exam-card') : null;
+    return (card && list.contains(card)) ? card : null;
+  }
+
+  function startPress(card, x, y) {
+    pressCard = card;
+    anchorX   = x;
+    anchorY   = y;
+    card.classList.add('press-arming');
+    pressTimer = setTimeout(function () {
+      pressTimer = null;
+      card.classList.remove('press-arming');
+      pressFired = true;
+      enterSelectionMode(kind, card.dataset[kind.idKey]);
+    }, LONG_PRESS_MS);
+  }
+
+  function cancelPress() {
+    if (pressTimer) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+    if (pressCard) pressCard.classList.remove('press-arming');
+    pressCard = null;
+  }
+
+  function movedTooFar(x, y) {
+    return Math.abs(x - anchorX) > TOUCH_SLOP || Math.abs(y - anchorY) > TOUCH_SLOP;
+  }
+
+  /* — Mouse — */
+
+  list.addEventListener('mousedown', function (e) {
+    if (e.button !== 0 || kind.selection) return;
+    const card = cardAt(e.target);
+    if (card) startPress(card, e.clientX, e.clientY);
+  });
+
+  document.addEventListener('mousemove', function (e) {
+    if (pressCard && movedTooFar(e.clientX, e.clientY)) cancelPress();
+  });
+
+  document.addEventListener('mouseup', function () {
+    cancelPress();
+    // Cleared only after the trailing click has fired, so the press that
+    // opened selection mode can't also run a card action.
+    if (pressFired) setTimeout(function () { pressFired = false; }, 0);
+  });
+
+  /* — Touch — */
+
+  list.addEventListener('touchstart', function (e) {
+    if (e.touches.length !== 1 || kind.selection) return;
+    const card = cardAt(e.target);
+    if (card) startPress(card, e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+
+  list.addEventListener('touchmove', function (e) {
+    const t = e.touches[0];
+    if (pressCard && movedTooFar(t.clientX, t.clientY)) cancelPress();
+  }, { passive: true });
+
+  list.addEventListener('touchend', function (e) {
+    if (pressFired) {
+      pressFired = false;
+      e.preventDefault(); // no synthetic click, so the press only selects
+    }
+    cancelPress();
+  }, { passive: false });
+
+  list.addEventListener('touchcancel', cancelPress);
+
+  // A held card must not raise the text-selection / context menu instead.
+  list.addEventListener('contextmenu', function (e) {
+    if (pressCard || kind.selection) e.preventDefault();
+  });
+
+  // Capture, so in selection mode a tap anywhere on a card toggles it and
+  // never reaches the card's own buttons.
+  list.addEventListener('click', function (e) {
+    if (pressFired) {
+      pressFired = false;
+      e.stopPropagation();
+      e.preventDefault();
+      return;
+    }
+    if (!kind.selection) return;
+    const card = cardAt(e.target);
+    if (!card) return; // folder headers stay usable while selecting
+    e.stopPropagation();
+    e.preventDefault();
+    toggleItemSelected(kind, card.dataset[kind.idKey]);
+  }, true);
+}
+
+[EXAM_FOLDERS, VERSE_FOLDERS].forEach(function (kind) {
+  wireSelectBar(kind);
+  initSelectPress(kind);
+});
+
+/* ═══════════════════════════════════════════════════════
    TAB 1 — EXAMS
    ═══════════════════════════════════════════════════════ */
 
 function renderExamList() {
   const exams    = loadExams();
-  const folders  = loadFolders();
+  const folders  = loadExamFolders();
   const activeId = getActiveExamId();
   const history  = loadHistory();
   const list     = $('exam-list');
   const noExams  = $('no-exams');
 
   list.innerHTML = '';
-  list.classList.toggle('selecting', _examSelection !== null);
+  list.classList.toggle('selecting', EXAM_FOLDERS.selection !== null);
 
   if (exams.length === 0 && folders.length === 0) {
     noExams.classList.remove('hidden');
+    updateSelectBar(EXAM_FOLDERS);
     return;
   }
 
@@ -392,59 +885,15 @@ function renderExamList() {
   });
 
   folders.forEach(function (folder) {
-    list.appendChild(buildFolderSection(folder, byFolder[folder.id] || [], ctx));
+    list.appendChild(buildFolderSection(EXAM_FOLDERS, folder, byFolder[folder.id] || [],
+      function (exam) { return buildExamCard(exam, ctx); }));
   });
 
   loose.forEach(function (exam) {
     list.appendChild(buildExamCard(exam, ctx));
   });
 
-  updateExamSelectBar();
-}
-
-/** One collapsible folder: a header that toggles it, and its exam cards. */
-function buildFolderSection(folder, exams, ctx) {
-  const section = document.createElement('div');
-  section.className = 'exam-folder' + (folder.collapsed ? ' collapsed' : '');
-  section.dataset.folderId = folder.id;
-
-  const header = document.createElement('div');
-  header.className = 'folder-header';
-  header.innerHTML =
-    '<button type="button" class="folder-toggle" aria-expanded="' + (folder.collapsed ? 'false' : 'true') + '">' +
-      '<span class="folder-chevron" aria-hidden="true">▸</span>' +
-      '<span class="folder-name">' + esc(folder.name) + '</span>' +
-      '<span class="folder-count">' + pluralize(exams.length, 'exam') + '</span>' +
-    '</button>' +
-    '<div class="folder-actions">' +
-      '<button type="button" class="btn-icon" data-folder-action="rename"' +
-        ' title="Rename folder" aria-label="Rename folder ' + esc(folder.name) + '">✎</button>' +
-      '<button type="button" class="btn-icon" data-folder-action="delete"' +
-        ' title="Delete folder" aria-label="Delete folder ' + esc(folder.name) + '">✕</button>' +
-    '</div>';
-
-  header.querySelector('.folder-toggle').addEventListener('click', function () {
-    toggleFolder(folder.id);
-  });
-  header.querySelectorAll('[data-folder-action]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      if (btn.dataset.folderAction === 'rename') promptRenameFolder(folder.id);
-      else deleteFolder(folder.id);
-    });
-  });
-
-  const body = document.createElement('div');
-  body.className = 'folder-body';
-
-  if (exams.length === 0) {
-    body.innerHTML = '<div class="folder-empty">No exams in here yet.</div>';
-  } else {
-    exams.forEach(function (exam) { body.appendChild(buildExamCard(exam, ctx)); });
-  }
-
-  section.appendChild(header);
-  section.appendChild(body);
-  return section;
+  updateSelectBar(EXAM_FOLDERS);
 }
 
 function buildExamCard(exam, ctx) {
@@ -454,7 +903,7 @@ function buildExamCard(exam, ctx) {
   const lastScore   = lastAttempt
     ? 'Last: ' + lastAttempt.percent + '%'
     : 'No attempts yet';
-  const selected = _examSelection !== null && _examSelection.has(exam.id);
+  const selected = EXAM_FOLDERS.selection !== null && EXAM_FOLDERS.selection.has(exam.id);
 
   const card = document.createElement('div');
   card.className = 'exam-card' + (isActive ? ' active-exam' : '') + (selected ? ' selected' : '');
@@ -512,374 +961,9 @@ function handleExamAction(action, id) {
   }
 }
 
-/* ─── Folders ───────────────────────────────────────── */
-
-function toggleFolder(id) {
-  const folders = loadFolders();
-  const folder  = folders.find(function (f) { return f.id === id; });
-  if (!folder) return;
-  folder.collapsed = !folder.collapsed;
-  saveFolders(folders);
-  renderExamList();
-}
-
-/** Append a folder and hand back its id, so callers can fill it. */
-function addFolder(name) {
-  const folders = loadFolders();
-  const folder  = {
-    id:        generateFolderId(),
-    name:      name,
-    created:   new Date().toISOString().slice(0, 10),
-    collapsed: false,
-  };
-  folders.push(folder);
-  saveFolders(folders);
-  return folder.id;
-}
-
-function promptNewFolder(onCreated) {
-  openFolderNameModal({
-    title:     'New Folder',
-    saveLabel: 'Create',
-    value:     '',
-    onSave:    function (name) { onCreated(addFolder(name)); },
-  });
-}
-
-function promptRenameFolder(id) {
-  const folder = loadFolders().find(function (f) { return f.id === id; });
-  if (!folder) return;
-
-  openFolderNameModal({
-    title:     'Rename Folder',
-    saveLabel: 'Save',
-    value:     folder.name,
-    onSave:    function (name) {
-      const folders = loadFolders();
-      const target  = folders.find(function (f) { return f.id === id; });
-      if (!target) return;
-      target.name = name;
-      saveFolders(folders);
-      renderExamList();
-    },
-  });
-}
-
-// Deleting a folder is only ever a regrouping: its exams move out, they are
-// never removed with it.
-function deleteFolder(id) {
-  const folder = loadFolders().find(function (f) { return f.id === id; });
-  if (!folder) return;
-
-  const count = loadExams().filter(function (e) { return e.folderId === id; }).length;
-  const tail  = count === 0
-    ? ''
-    : ' The ' + pluralize(count, 'exam') + ' inside will move out of the folder, not be deleted.';
-
-  showConfirm('Delete folder "' + folder.name + '"?' + tail, 'Delete', function () {
-    saveExams(loadExams().map(function (e) {
-      return e.folderId === id ? { ...e, folderId: null } : e;
-    }));
-    saveFolders(loadFolders().filter(function (f) { return f.id !== id; }));
-    renderExamList();
-  });
-}
-
 $('btn-create-folder').addEventListener('click', function () {
-  promptNewFolder(function () { renderExamList(); });
+  promptNewFolder(EXAM_FOLDERS, function () { renderExamList(); });
 });
-
-/* ─── Folder name modal (create + rename) ───────────── */
-
-let _folderNameCallback = null;
-
-function openFolderNameModal(opts) {
-  _folderNameCallback = opts.onSave;
-  $('folder-name-title').textContent      = opts.title;
-  $('btn-folder-name-save').textContent   = opts.saveLabel || 'Save';
-
-  const input = $('folder-name-input');
-  input.value = opts.value || '';
-  syncFolderNameSave();
-
-  BackStack.push('modal-folder-name', closeFolderNameModal);
-  $('folder-name-modal').classList.remove('hidden');
-
-  // Same rule as the editor: don't force the keyboard open on touch.
-  if (!('ontouchstart' in window)) input.select();
-}
-
-function closeFolderNameModal() {
-  BackStack.release('modal-folder-name');
-  $('folder-name-modal').classList.add('hidden');
-  _folderNameCallback = null;
-}
-
-function syncFolderNameSave() {
-  $('btn-folder-name-save').disabled = $('folder-name-input').value.trim() === '';
-}
-
-function submitFolderName() {
-  const name = $('folder-name-input').value.trim();
-  if (!name) return;
-  // closeFolderNameModal clears the callback, so hold onto it first.
-  const callback = _folderNameCallback;
-  closeFolderNameModal();
-  if (typeof callback === 'function') callback(name);
-}
-
-$('folder-name-input').addEventListener('input', syncFolderNameSave);
-$('folder-name-input').addEventListener('keydown', function (e) {
-  if (e.key === 'Enter') submitFolderName();
-});
-$('btn-folder-name-save').addEventListener('click', submitFolderName);
-$('btn-folder-name-cancel').addEventListener('click', closeFolderNameModal);
-$('folder-name-close').addEventListener('click', closeFolderNameModal);
-$('folder-name-backdrop').addEventListener('click', closeFolderNameModal);
-
-/* ─── Folder picker modal ───────────────────────────── */
-
-function openFolderPickModal(onPick) {
-  const folders = loadFolders();
-  const exams   = loadExams();
-  const list    = $('folder-pick-list');
-  list.innerHTML = '';
-
-  folders.forEach(function (folder) {
-    const btn = document.createElement('button');
-    btn.type      = 'button';
-    btn.className = 'folder-pick-item';
-    btn.innerHTML =
-      '<span class="folder-pick-name">' + esc(folder.name) + '</span>' +
-      '<span class="folder-pick-count">' +
-        pluralize(exams.filter(function (e) { return e.folderId === folder.id; }).length, 'exam') +
-      '</span>';
-    btn.addEventListener('click', function () {
-      closeFolderPickModal();
-      onPick(folder.id);
-    });
-    list.appendChild(btn);
-  });
-
-  BackStack.push('modal-folder-pick', closeFolderPickModal);
-  $('folder-pick-modal').classList.remove('hidden');
-}
-
-function closeFolderPickModal() {
-  BackStack.release('modal-folder-pick');
-  $('folder-pick-modal').classList.add('hidden');
-}
-
-$('btn-folder-pick-cancel').addEventListener('click', closeFolderPickModal);
-$('folder-pick-close').addEventListener('click', closeFolderPickModal);
-$('folder-pick-backdrop').addEventListener('click', closeFolderPickModal);
-
-/* ─── Selection mode ────────────────────────────────── */
-
-// A Set of exam ids while selection mode is on, null when it is off.
-let _examSelection = null;
-
-function enterSelectionMode(firstId) {
-  if (_examSelection) return;
-  _examSelection = new Set();
-  if (firstId) _examSelection.add(firstId);
-  BackStack.push('exam-selection', exitSelectionMode);
-  renderExamList();
-}
-
-function exitSelectionMode() {
-  if (!_examSelection) return;
-  _examSelection = null;
-  BackStack.release('exam-selection');
-  renderExamList();
-}
-
-function toggleExamSelected(id) {
-  if (!_examSelection) return;
-  if (_examSelection.has(id)) _examSelection.delete(id);
-  else _examSelection.add(id);
-
-  // Repainting one card beats re-rendering the list, which would lose the
-  // scroll position mid-selection.
-  $('exam-list').querySelectorAll('.exam-card').forEach(function (card) {
-    if (card.dataset.examId === id) card.classList.toggle('selected', _examSelection.has(id));
-  });
-  updateExamSelectBar();
-}
-
-function updateExamSelectBar() {
-  const bar = $('exam-select-bar');
-  if (!_examSelection) {
-    bar.classList.add('hidden');
-    return;
-  }
-
-  const none = _examSelection.size === 0;
-  $('exam-select-count').textContent = _examSelection.size + ' selected';
-  $('btn-sel-new-folder').disabled    = none;
-  $('btn-sel-add-folder').disabled    = none || loadFolders().length === 0;
-  $('btn-sel-remove-folder').disabled = none;
-  $('btn-sel-delete').disabled        = none;
-  bar.classList.remove('hidden');
-
-  // The bar wraps to as many rows as the buttons need, so the list has to be
-  // told how much room to leave under the last card (cf. updateTabNavTop).
-  document.documentElement.style.setProperty('--exam-select-bar-h', bar.offsetHeight + 'px');
-}
-
-/** File every selected exam under `folderId` (null moves them out). */
-function assignSelectionToFolder(folderId) {
-  if (!_examSelection || _examSelection.size === 0) return;
-  const ids = new Set(_examSelection);
-
-  saveExams(loadExams().map(function (e) {
-    return ids.has(e.id) ? { ...e, folderId: folderId } : e;
-  }));
-  exitSelectionMode(); // re-renders
-}
-
-$('btn-sel-new-folder').addEventListener('click', function () {
-  if (!_examSelection || _examSelection.size === 0) return;
-  promptNewFolder(function (folderId) { assignSelectionToFolder(folderId); });
-});
-
-$('btn-sel-add-folder').addEventListener('click', function () {
-  if (!_examSelection || _examSelection.size === 0) return;
-  openFolderPickModal(function (folderId) { assignSelectionToFolder(folderId); });
-});
-
-$('btn-sel-remove-folder').addEventListener('click', function () {
-  assignSelectionToFolder(null);
-});
-
-$('btn-sel-delete').addEventListener('click', function () {
-  if (!_examSelection || _examSelection.size === 0) return;
-  const ids = new Set(_examSelection);
-
-  showConfirm('Delete ' + pluralize(ids.size, 'exam') + '? This cannot be undone.', 'Delete', function () {
-    saveExams(loadExams().filter(function (e) { return !ids.has(e.id); }));
-    if (ids.has(getActiveExamId())) {
-      localStorage.removeItem(KEYS.activeExam);
-      renderTrainer();
-    }
-    exitSelectionMode();
-  });
-});
-
-$('btn-sel-cancel').addEventListener('click', exitSelectionMode);
-
-/*
- * Press and hold an exam card to start selecting, then tap the rest. Mirrors
- * the verse picker's long press (initVerseSelectDrag): a finger that travels
- * is scrolling, so it cancels the press rather than selecting.
- */
-(function initExamSelectPress() {
-  const list = $('exam-list');
-
-  const LONG_PRESS_MS = 350;
-  const TOUCH_SLOP    = 10; // px of travel that counts as a scroll instead
-
-  let pressCard    = null;
-  let pressTimer   = null;
-  let anchorX      = 0;
-  let anchorY      = 0;
-  let pressFired   = false; // the press opened selection mode; eat its click
-
-  function cardAt(target) {
-    const card = target.closest ? target.closest('.exam-card') : null;
-    return (card && list.contains(card)) ? card : null;
-  }
-
-  function startPress(card, x, y) {
-    pressCard = card;
-    anchorX   = x;
-    anchorY   = y;
-    card.classList.add('press-arming');
-    pressTimer = setTimeout(function () {
-      pressTimer = null;
-      card.classList.remove('press-arming');
-      pressFired = true;
-      enterSelectionMode(card.dataset.examId);
-    }, LONG_PRESS_MS);
-  }
-
-  function cancelPress() {
-    if (pressTimer) {
-      clearTimeout(pressTimer);
-      pressTimer = null;
-    }
-    if (pressCard) pressCard.classList.remove('press-arming');
-    pressCard = null;
-  }
-
-  function movedTooFar(x, y) {
-    return Math.abs(x - anchorX) > TOUCH_SLOP || Math.abs(y - anchorY) > TOUCH_SLOP;
-  }
-
-  /* — Mouse — */
-
-  list.addEventListener('mousedown', function (e) {
-    if (e.button !== 0 || _examSelection) return;
-    const card = cardAt(e.target);
-    if (card) startPress(card, e.clientX, e.clientY);
-  });
-
-  document.addEventListener('mousemove', function (e) {
-    if (pressCard && movedTooFar(e.clientX, e.clientY)) cancelPress();
-  });
-
-  document.addEventListener('mouseup', function () {
-    cancelPress();
-    // Cleared only after the trailing click has fired, so the press that
-    // opened selection mode can't also run a card action.
-    if (pressFired) setTimeout(function () { pressFired = false; }, 0);
-  });
-
-  /* — Touch — */
-
-  list.addEventListener('touchstart', function (e) {
-    if (e.touches.length !== 1 || _examSelection) return;
-    const card = cardAt(e.target);
-    if (card) startPress(card, e.touches[0].clientX, e.touches[0].clientY);
-  }, { passive: true });
-
-  list.addEventListener('touchmove', function (e) {
-    const t = e.touches[0];
-    if (pressCard && movedTooFar(t.clientX, t.clientY)) cancelPress();
-  }, { passive: true });
-
-  list.addEventListener('touchend', function (e) {
-    if (pressFired) {
-      pressFired = false;
-      e.preventDefault(); // no synthetic click, so the press only selects
-    }
-    cancelPress();
-  }, { passive: false });
-
-  list.addEventListener('touchcancel', cancelPress);
-
-  // A held card must not raise the text-selection / context menu instead.
-  list.addEventListener('contextmenu', function (e) {
-    if (pressCard || _examSelection) e.preventDefault();
-  });
-
-  // Capture, so in selection mode a tap anywhere on a card toggles it and
-  // never reaches the card's own Set Active / Edit / Delete buttons.
-  list.addEventListener('click', function (e) {
-    if (pressFired) {
-      pressFired = false;
-      e.stopPropagation();
-      e.preventDefault();
-      return;
-    }
-    if (!_examSelection) return;
-    const card = cardAt(e.target);
-    if (!card) return; // folder headers stay usable while selecting
-    e.stopPropagation();
-    e.preventDefault();
-    toggleExamSelected(card.dataset.examId);
-  }, true);
-})();
 
 /* ─── JSON Import ───────────────────────────────────── */
 
@@ -3201,50 +3285,79 @@ function verseTitle(v) {
 
 function renderVerseList() {
   const verses  = loadVerses();
+  const folders = loadVerseFolders();
   const list    = $('verse-list');
   const noItems = $('no-verses');
 
   list.innerHTML = '';
+  list.classList.toggle('selecting', VERSE_FOLDERS.selection !== null);
 
-  if (verses.length === 0) {
+  if (verses.length === 0 && folders.length === 0) {
     noItems.classList.remove('hidden');
+    updateSelectBar(VERSE_FOLDERS);
     return;
   }
 
   noItems.classList.add('hidden');
 
+  // Grouped first, then whatever isn't filed. An entry pointing at a folder
+  // that no longer exists counts as unfiled rather than disappearing.
+  const known    = new Set(folders.map(function (f) { return f.id; }));
+  const byFolder = {};
+  const loose    = [];
   verses.forEach(function (v) {
-    const card = document.createElement('div');
-    card.className = 'exam-card';
-    const items = normalizeVerseEntry(v);
-    const wordCount = items.reduce(function (sum, it) {
-      return sum + it.text.split(/\s+/).filter(Boolean).length;
-    }, 0);
-    const title = verseTitle(v);
-    const range = autoVerseTitle(items);
-
-    // The reference range only earns a place in the meta line when the entry
-    // carries a title of its own — otherwise it already *is* the title.
-    const bits = [];
-    if (range && range !== title) bits.push(range);
-    if (items.length > 1) bits.push(pluralize(items.length, 'verse'));
-    bits.push(pluralize(wordCount, 'word'));
-    const meta = bits.map(function (bit, i) {
-      return '<span>' + (i ? '· ' : '') + esc(bit) + '</span>';
-    }).join('');
-
-    card.innerHTML =
-      '<div class="exam-card-info">' +
-        '<div class="exam-card-name">' + esc(title) + '</div>' +
-        '<div class="exam-card-meta">' + meta + '</div>' +
-      '</div>' +
-      '<div class="exam-card-actions">' +
-        '<button class="btn btn-primary btn-sm" data-verse-practice="' + esc(v.id) + '">Practice</button>' +
-        '<button class="btn btn-secondary btn-sm" data-verse-edit="' + esc(v.id) + '">Edit</button>' +
-        '<button class="btn btn-danger-ghost btn-sm" data-verse-delete="' + esc(v.id) + '">Delete</button>' +
-      '</div>';
-    list.appendChild(card);
+    if (v.folderId && known.has(v.folderId)) {
+      (byFolder[v.folderId] = byFolder[v.folderId] || []).push(v);
+    } else {
+      loose.push(v);
+    }
   });
+
+  folders.forEach(function (folder) {
+    list.appendChild(buildFolderSection(VERSE_FOLDERS, folder, byFolder[folder.id] || [], buildVerseCard));
+  });
+
+  loose.forEach(function (v) { list.appendChild(buildVerseCard(v)); });
+
+  updateSelectBar(VERSE_FOLDERS);
+}
+
+function buildVerseCard(v) {
+  const items = normalizeVerseEntry(v);
+  const wordCount = items.reduce(function (sum, it) {
+    return sum + it.text.split(/\s+/).filter(Boolean).length;
+  }, 0);
+  const title    = verseTitle(v);
+  const range    = autoVerseTitle(items);
+  const selected = VERSE_FOLDERS.selection !== null && VERSE_FOLDERS.selection.has(v.id);
+
+  // The reference range only earns a place in the meta line when the entry
+  // carries a title of its own — otherwise it already *is* the title.
+  const bits = [];
+  if (range && range !== title) bits.push(range);
+  if (items.length > 1) bits.push(pluralize(items.length, 'verse'));
+  bits.push(pluralize(wordCount, 'word'));
+  const meta = bits.map(function (bit, i) {
+    return '<span>' + (i ? '· ' : '') + esc(bit) + '</span>';
+  }).join('');
+
+  const card = document.createElement('div');
+  card.className = 'exam-card' + (selected ? ' selected' : '');
+  card.dataset.verseId = v.id;
+
+  card.innerHTML =
+    '<span class="exam-check" aria-hidden="true">✓</span>' +
+    '<div class="exam-card-info">' +
+      '<div class="exam-card-name">' + esc(title) + '</div>' +
+      '<div class="exam-card-meta">' + meta + '</div>' +
+    '</div>' +
+    '<div class="exam-card-actions">' +
+      '<button class="btn btn-primary btn-sm" data-verse-practice="' + esc(v.id) + '">Practice</button>' +
+      '<button class="btn btn-secondary btn-sm" data-verse-edit="' + esc(v.id) + '">Edit</button>' +
+      '<button class="btn btn-danger-ghost btn-sm" data-verse-delete="' + esc(v.id) + '">Delete</button>' +
+    '</div>';
+
+  return card;
 }
 
 /* ─── Verse List Event Delegation ──────────────────── */
@@ -3276,6 +3389,10 @@ $('verse-list').addEventListener('click', function (e) {
    VERSE IMPORT / EXPORT  (mirrors the exam JSON system)
    A file is an array of { ref?, text } items → one verse entry.
    ═══════════════════════════════════════════════════════ */
+
+$('btn-verse-create-folder').addEventListener('click', function () {
+  promptNewFolder(VERSE_FOLDERS, function () { renderVerseList(); });
+});
 
 $('btn-verse-import').addEventListener('click', function () {
   $('verse-import-file').click();
