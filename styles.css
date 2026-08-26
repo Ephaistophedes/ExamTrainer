@@ -1812,6 +1812,42 @@ main {
   border-color: var(--error-border);
 }
 
+/* The same sentence again, with the answers that were meant to be there */
+.smg-answer-key {
+  margin: 0 0 0.25rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+}
+
+.smg-answer-key .smg-q-text {
+  margin-bottom: 0;
+}
+
+.smg-answer-key .fib-line {
+  line-height: 1.9;
+}
+
+.smg-answer-key-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.35rem;
+}
+
+/* An answer in that sentence, sitting where its blank was */
+.smg-key-word {
+  font-weight: 600;
+  color: var(--primary-dark);
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--primary-light);
+}
+
 .smg-mark-hint {
   margin-top: 0.75rem;
   font-size: 0.78rem;

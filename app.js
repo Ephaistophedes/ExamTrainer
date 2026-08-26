@@ -1278,8 +1278,9 @@ function renderEditorQuestions(questions) {
   const container = $('editor-questions');
   container.innerHTML = '';
   questions.forEach(function (q, i) {
-    if (q.type === 'fill_blank') {
-      container.appendChild(createFillBlankEditorRow(q, i));
+    const blanks = blankEditorModel(q);
+    if (blanks) {
+      container.appendChild(createFillBlankEditorRow(q, i, blanks));
     } else {
       container.appendChild(createEditorRow(q, i));
     }
@@ -1404,24 +1405,59 @@ function blankFillQuestion() {
   return { id: generateQid(), type: 'fill_blank', sentence: '', correct: [] };
 }
 
-function createFillBlankEditorRow(q, idx) {
+/*
+ * The sentence behind a blanks question, whichever way it was stored: the
+ * editor's own [[answer]] markers, or the runs of underscores that come back
+ * from imported (and re-imported exported) JSON. Returns the whole sentence
+ * with every answer written back into its blank, plus which word positions
+ * those blanks are — the two things the editor needs to show it as a sentence
+ * with tagged words again. Null for anything that isn't a blanks question.
+ */
+function blankEditorModel(q) {
+  const native = q.type === 'fill_blank' && !!q.sentence;
+  const text   = native ? q.sentence : q.question;
+  if (!text) return null;
+  // Underscores only count as blanks when there's one per answer, the same
+  // test the trainer uses before it puts the answers inside the sentence.
+  if (!native && !parseBlankTokens(q)) return null;
+
+  const blankIndices = new Set();
+  let wordIdx = 0;
+  let part    = 0;
+
+  // Split on whitespace but keep it, so a sentence written over several lines
+  // comes back to the textarea the way it was typed.
+  const sentence = text.split(/(\s+)/).map(function (chunk) {
+    if (!chunk || /^\s+$/.test(chunk)) return chunk;
+    const i = wordIdx++;
+
+    if (native) {
+      if (chunk.startsWith('[[') && chunk.endsWith(']]')) {
+        blankIndices.add(i);
+        return chunk.slice(2, -2);
+      }
+      return chunk;
+    }
+
+    const m = BLANK_UNDERSCORES.exec(chunk);
+    if (!m) return chunk;
+    blankIndices.add(i);
+    // Punctuation hugging the blank joins the word standing in for it —
+    // grading strips punctuation from both sides anyway.
+    return m[1] + (q.correct[part++] || '') + m[2];
+  }).join('');
+
+  return { sentence: sentence, blankIndices: blankIndices };
+}
+
+function createFillBlankEditorRow(q, idx, model) {
   const row = document.createElement('div');
   row.className   = 'editor-q-row editor-q-fill-blank';
   row.dataset.qid  = q.id;
   row.dataset.type = 'fill_blank';
 
-  // Parse existing sentence to find which word positions are blanks
-  const blankIndices = new Set();
-  let cleanSentence = '';
-  if (q.sentence) {
-    const rawTokens = q.sentence.split(/\s+/).filter(Boolean);
-    rawTokens.forEach(function (token, i) {
-      if (token.startsWith('[[') && token.endsWith(']]')) {
-        blankIndices.add(i);
-      }
-    });
-    cleanSentence = q.sentence.replace(/\[\[([^\]]+)\]\]/g, '$1');
-  }
+  const parsed       = model || blankEditorModel(q) || { sentence: '', blankIndices: new Set() };
+  const blankIndices = parsed.blankIndices;
 
   row.innerHTML =
     '<div class="editor-q-header">' +
@@ -1433,7 +1469,7 @@ function createFillBlankEditorRow(q, idx) {
     '<div class="form-group" style="margin-bottom:0.5rem;">' +
       '<textarea class="input fib-sentence-input" rows="3"' +
         ' placeholder="Type the full sentence here…"' +
-        ' autocomplete="off">' + esc(cleanSentence) + '</textarea>' +
+        ' autocomplete="off">' + esc(parsed.sentence) + '</textarea>' +
     '</div>' +
     '<div class="fib-words-hint">Click words to mark them as blanks:</div>' +
     '<div class="fib-words-container"></div>' +
@@ -1450,17 +1486,52 @@ function createFillBlankEditorRow(q, idx) {
     row.querySelector('.fib-preview-text').textContent = parts.join(' ');
   }
 
+  /*
+   * Keep the marks on the right words when the sentence is edited. The same
+   * number of words means one was rewritten in place, so every mark stays put
+   * — that's what fixing a typo inside a blanked word looks like. Otherwise
+   * words were added or removed, and each marked word is matched to its next
+   * occurrence so the marks travel with them instead of being wiped.
+   */
+  let lastWords = null;
+
+  function realignBlanks(words) {
+    if (lastWords && words.length !== lastWords.length) {
+      const marked = Array.from(blankIndices)
+        .sort(function (a, b) { return a - b; })
+        .map(function (i) { return lastWords[i]; });
+
+      blankIndices.clear();
+      let from = 0;
+      marked.forEach(function (word) {
+        const at = words.indexOf(word, from);
+        if (at === -1) return;
+        blankIndices.add(at);
+        from = at + 1;
+      });
+    }
+
+    // A mark can't outlive the word it was put on.
+    Array.from(blankIndices).forEach(function (i) {
+      if (i >= words.length) blankIndices.delete(i);
+    });
+
+    lastWords = words.slice();
+  }
+
   function renderWordTokens() {
-    const text = row.querySelector('.fib-sentence-input').value.trim();
+    const text      = row.querySelector('.fib-sentence-input').value.trim();
     const container = row.querySelector('.fib-words-container');
+    const words     = text ? text.split(/\s+/).filter(Boolean) : [];
+
+    realignBlanks(words);
     container.innerHTML = '';
 
-    if (!text) {
+    if (words.length === 0) {
       row.querySelector('.fib-preview-text').textContent = '';
       return;
     }
 
-    const words = text.split(/\s+/).filter(Boolean);
     words.forEach(function (word, i) {
       const span = document.createElement('span');
       span.className = 'fib-word' + (blankIndices.has(i) ? ' fib-blank' : '');
@@ -1486,10 +1557,19 @@ function createFillBlankEditorRow(q, idx) {
     updatePreview();
   }
 
-  // Debounce textarea re-tokenisation
+  // Debounce textarea re-tokenisation. Saving reads the word tokens, so it
+  // flushes a pending one first rather than writing out the previous sentence.
   let debounceTimer = null;
+  row._fibFlush = function () {
+    clearTimeout(debounceTimer);
+    const text  = row.querySelector('.fib-sentence-input').value.trim();
+    const words = text ? text.split(/\s+/).filter(Boolean) : [];
+    const same  = lastWords && words.length === lastWords.length &&
+      words.every(function (w, i) { return w === lastWords[i]; });
+    if (!same) renderWordTokens();
+  };
+
   row.querySelector('.fib-sentence-input').addEventListener('input', function () {
-    blankIndices.clear();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(function () {
       renderWordTokens();
@@ -1546,6 +1626,7 @@ function getEditorState() {
     const id  = isNaN(qid) ? qid : Number(qid);
 
     if (row.dataset.type === 'fill_blank') {
+      if (row._fibFlush) row._fibFlush();
       const wordEls = row.querySelectorAll('.fib-word');
       const sentenceParts = [];
       const correct = [];
@@ -2676,9 +2757,28 @@ function renderSelfMarkView() {
         );
       }).join(' ');
 
+      // The sentence above holds what was written, not what was right, so the
+      // same sentence is repeated underneath with the answers in place — the
+      // answer column this question does without, read as one line.
+      const keyHtml = blankTokens.map(function (t) {
+        if (!t.blank) return '<span class="fib-sentence-word">' + esc(t.text) + '</span>';
+        return (
+          '<span class="fib-blank-slot">' +
+            esc(t.before) +
+            '<span class="fib-blank-num">' + (t.part + 1) + '</span>' +
+            '<span class="smg-key-word">' + esc(q.correct[t.part] || '') + '</span>' +
+            esc(t.after) +
+          '</span>'
+        );
+      }).join(' ');
+
       leftCell.innerHTML =
         '<div class="smg-q-num">Question ' + questionDisplayNum(q, qi) + '</div>' +
         '<div class="smg-q-text"><span class="fib-line">' + sentenceHtml + '</span></div>' +
+        '<div class="smg-answer-key">' +
+          '<div class="smg-answer-key-label">Correct answers</div>' +
+          '<div class="smg-q-text"><span class="fib-line">' + keyHtml + '</span></div>' +
+        '</div>' +
         '<div class="smg-mark-hint">Tap an answer to mark it correct, double-tap for incorrect.</div>';
 
       leftCell.classList.add('smg-full');
