@@ -95,10 +95,14 @@
 
         <div class="trainer-header">
           <h2 id="trainer-exam-name"></h2>
-          <div class="mode-toggle" role="group" aria-label="Exam mode">
-            <button id="mode-full" class="mode-btn active">Full Exam</button>
-            <button id="mode-weak" class="mode-btn">Weak Areas Only</button>
-            <button id="mode-custom" class="mode-btn">Custom</button>
+          <div class="trainer-mode-row">
+            <div class="mode-toggle" role="group" aria-label="Exam mode">
+              <button id="mode-full" class="mode-btn active">Full Exam</button>
+              <button id="mode-weak" class="mode-btn">Weak Areas Only</button>
+              <button id="mode-custom" class="mode-btn">Custom</button>
+            </div>
+            <button id="btn-audio-practice" class="btn btn-secondary btn-audio"
+                    title="Hands-free voice practice">&#x1F3A7; Audio Practice</button>
           </div>
           <label id="weak-parts-toggle" class="weak-parts-toggle hidden">
             <input type="checkbox" id="weak-parts-check">
@@ -148,6 +152,59 @@
         <div class="bottom-bar">
           <button id="btn-submit" class="btn btn-primary btn-large">Submit</button>
           <button id="btn-submit-mark" class="btn btn-secondary btn-large">Submit &amp; Mark</button>
+        </div>
+
+      </div>
+
+      <!-- ─── Audio practice (hands-free voice session) ─── -->
+      <div id="audio-practice-view" class="audio-view hidden">
+
+        <div class="audio-topbar">
+          <button id="btn-audio-back" class="btn btn-ghost">&larr; Back</button>
+          <div class="audio-topbar-meta">
+            <span id="audio-exam-name" class="audio-exam-name"></span>
+            <span id="audio-engine-note" class="audio-engine-note"></span>
+          </div>
+          <button id="btn-audio-offline" class="btn btn-secondary audio-offline-btn hidden"
+                  title="Download the on-device model (39MB) so audio practice works with no connection">Enable offline</button>
+          <span id="audio-progress" class="audio-progress" aria-live="polite"></span>
+        </div>
+
+        <div id="audio-notice" class="audio-notice hidden" role="alert"></div>
+
+        <div id="audio-session">
+
+          <div class="audio-stage">
+            <div id="audio-orb" class="audio-orb" aria-hidden="true"></div>
+            <span id="audio-state-label" class="audio-state-label" aria-live="polite"></span>
+          </div>
+
+          <p id="audio-part" class="audio-part hidden"></p>
+          <p id="audio-question" class="audio-question"></p>
+
+          <p id="audio-heard" class="audio-heard hidden" aria-live="polite"></p>
+          <div id="audio-verdict" class="audio-verdict hidden" role="status"></div>
+
+          <p class="audio-hints">
+            Say &ldquo;<strong>what is the answer</strong>&rdquo;,
+            &ldquo;<strong>next question</strong>&rdquo; or
+            &ldquo;<strong>repeat question</strong>&rdquo; at any time.
+          </p>
+
+          <div class="audio-controls">
+            <button id="btn-audio-repeat" class="btn btn-secondary">&#x21BB; Repeat</button>
+            <button id="btn-audio-reveal" class="btn btn-secondary">Answer</button>
+            <button id="btn-audio-next" class="btn btn-secondary">Next &rarr;</button>
+            <button id="btn-audio-stop" class="btn btn-danger-ghost">Stop</button>
+          </div>
+
+        </div>
+
+        <div id="audio-summary" class="audio-summary hidden">
+          <h3>Session finished</h3>
+          <div id="audio-summary-score" class="audio-summary-score"></div>
+          <p id="audio-summary-detail" class="audio-summary-detail"></p>
+          <button id="btn-audio-done" class="btn btn-primary">Done</button>
         </div>
 
       </div>

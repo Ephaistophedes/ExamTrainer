@@ -84,6 +84,8 @@ const KEYS = {
   verseBank:   'verseBank',
   verseFolders: 'verseFolders',
   verseSelection: 'verseSelection',
+  voskModel:    'voskModelReady',
+  sttEngine:    'audioSttEngine',
 };
 
 // Listeners notified whenever persisted app data changes (used by Drive sync).
@@ -4660,6 +4662,1586 @@ $('btn-verse-prev-item').addEventListener('click', function () {
   loadVerseSession(); // preserves _verseLevel via setupVerseLevel()
 });
 
+
+
+
+/* ═══════════════════════════════════════════════════════
+   AUDIO PRACTICE
+   Hands-free voice practice for the commute: the app reads
+   a question out loud, listens for a spoken answer, and
+   says whether it was right.
+
+   Speech is not typing, so this cannot reuse answersMatch()
+   as-is — that allows a 10% edit distance, which is three
+   characters on a median answer here. A spoken answer gets
+   the words right and the wording wrong, so it is graded on
+   how much of the correct answer's *content* came back, with
+   scripture references canonicalised first ("Rv 3:12" and
+   "revelation three twelve" are the same answer).
+   ═══════════════════════════════════════════════════════ */
+
+/* ─── Spoken-form normalisation ─────────────────────── */
+
+const SPOKEN_NUMBERS = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+  fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60,
+  seventy: 70, eighty: 80, ninety: 90,
+  first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7,
+  eighth: 8, ninth: 9, tenth: 10, eleventh: 11, twelfth: 12,
+};
+
+// Dictation habits that carry no meaning: hesitation noise, and the
+// run-ups people say before the answer itself ("um, I think it's ...").
+const SPEECH_FILLERS = new Set([
+  'um', 'uh', 'er', 'erm', 'ah', 'hmm', 'mmm', 'okay', 'ok', 'so', 'well',
+  'like', 'basically', 'actually', 'literally', 'yeah',
+]);
+
+const SPEECH_LEAD_INS = [
+  /^(?:i (?:think|guess|believe|would say|d say)|the answer is|answer is|it is|it s|its|that s|thats|maybe|probably|possibly)\s+/,
+];
+
+/**
+ * Turn spoken number words into digits so "chapter nineteen verse five"
+ * lines up with "19:5". Handles the two-word tens ("twenty one" -> 21)
+ * that recognisers spell out rather than digitise.
+ */
+function spokenNumbersToDigits(text) {
+  const words = text.split(' ');
+  const out   = [];
+
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!Object.prototype.hasOwnProperty.call(SPOKEN_NUMBERS, w)) {
+      out.push(w);
+      continue;
+    }
+    let val    = SPOKEN_NUMBERS[w];
+    const next = words[i + 1];
+    // "twenty one" is one number; "twenty" then "chapter" is not.
+    if (val >= 20 && val % 10 === 0 && next &&
+        Object.prototype.hasOwnProperty.call(SPOKEN_NUMBERS, next) &&
+        SPOKEN_NUMBERS[next] < 10) {
+      val += SPOKEN_NUMBERS[next];
+      i++;
+    }
+    out.push(String(val));
+  }
+
+  return out.join(' ');
+}
+
+/**
+ * Shared first pass for anything spoken or stored: lower-cased, stripped
+ * of punctuation, numbers digitised. Builds on normalizeAnswer() so audio
+ * mode inherits the same punctuation and "of the" handling as the typed
+ * trainer, then adds what only speech needs.
+ */
+function normalizeSpeech(text) {
+  let s = normalizeAnswer(text);
+  s = spokenNumbersToDigits(s);
+
+  SPEECH_LEAD_INS.forEach(function (rx) { s = s.replace(rx, ''); });
+
+  s = s.split(' ')
+    .filter(function (w) { return w && !SPEECH_FILLERS.has(w); })
+    .join(' ');
+
+  return s.trim();
+}
+
+/* ─── Scripture references ──────────────────────────── */
+
+/**
+ * Book aliases -> canonical name. The abbreviations are the ones this exam
+ * data actually uses (Rv, Jn, Mt, Isa, ...); the spelled-out forms are what
+ * a recogniser hands back when the same reference is spoken aloud.
+ */
+const BIBLE_BOOKS = (function () {
+  const spec = [
+    ['genesis',         ['gen', 'ge', 'gn']],
+    ['exodus',          ['ex', 'exo', 'exod']],
+    ['leviticus',       ['lev', 'lv']],
+    ['numbers',         ['num', 'nm', 'nu']],
+    ['deuteronomy',     ['deut', 'dt', 'deu']],
+    ['joshua',          ['josh', 'jos']],
+    ['judges',          ['judg', 'jdg']],
+    ['ruth',            ['rth', 'ru']],
+    ['1 samuel',        ['1 sam', '1 sm', 'first samuel']],
+    ['2 samuel',        ['2 sam', '2 sm', 'second samuel']],
+    ['1 kings',         ['1 kgs', '1 kin', 'first kings']],
+    ['2 kings',         ['2 kgs', '2 kin', 'second kings']],
+    ['1 chronicles',    ['1 chr', 'first chronicles']],
+    ['2 chronicles',    ['2 chr', 'second chronicles']],
+    ['ezra',            ['ezr']],
+    ['nehemiah',        ['neh']],
+    ['esther',          ['est']],
+    ['job',             ['jb']],
+    ['psalms',          ['ps', 'psa', 'psalm', 'pss']],
+    ['proverbs',        ['prov', 'pr', 'prv']],
+    ['ecclesiastes',    ['eccl', 'ecc']],
+    ['song of songs',   ['sos', 'canticles', 'song of solomon']],
+    ['isaiah',          ['isa', 'is']],
+    ['jeremiah',        ['jer', 'jr']],
+    ['lamentations',    ['lam']],
+    ['ezekiel',         ['ezek', 'eze', 'ez']],
+    ['daniel',          ['dan', 'dn']],
+    ['hosea',           ['hos', 'ho']],
+    ['joel',            ['jl']],
+    ['amos',            ['am']],
+    ['obadiah',         ['obad', 'ob']],
+    ['jonah',           ['jon']],
+    ['micah',           ['mic', 'mi']],
+    ['nahum',           ['nah', 'na']],
+    ['habakkuk',        ['hab']],
+    ['zephaniah',       ['zeph', 'zep']],
+    ['haggai',          ['hag']],
+    ['zechariah',       ['zech', 'zec']],
+    ['malachi',         ['mal']],
+    ['matthew',         ['mt', 'matt']],
+    ['mark',            ['mk', 'mrk']],
+    ['luke',            ['lk', 'luk']],
+    ['john',            ['jn', 'jhn']],
+    ['acts',            ['ac', 'act']],
+    ['romans',          ['rom', 'ro', 'rm']],
+    ['1 corinthians',   ['1 cor', '1 co', 'first corinthians']],
+    ['2 corinthians',   ['2 cor', '2 co', 'second corinthians']],
+    ['galatians',       ['gal', 'ga']],
+    ['ephesians',       ['eph']],
+    ['philippians',     ['phil', 'php']],
+    ['colossians',      ['col']],
+    ['1 thessalonians', ['1 thess', '1 th', '1 thes', 'first thessalonians']],
+    ['2 thessalonians', ['2 thess', '2 th', '2 thes', 'second thessalonians']],
+    ['1 timothy',       ['1 tim', '1 ti', 'first timothy']],
+    ['2 timothy',       ['2 tim', '2 ti', 'second timothy']],
+    ['titus',           ['tit']],
+    ['philemon',        ['phlm', 'phm']],
+    ['hebrews',         ['heb']],
+    ['james',           ['jas', 'jm']],
+    ['1 peter',         ['1 pet', '1 pt', 'first peter']],
+    ['2 peter',         ['2 pet', '2 pt', 'second peter']],
+    ['1 john',          ['1 jn', '1 jhn', 'first john']],
+    ['2 john',          ['2 jn', '2 jhn', 'second john']],
+    ['3 john',          ['3 jn', '3 jhn', 'third john']],
+    ['jude',            ['jud']],
+    ['revelation',      ['rv', 'rev', 'apocalypse', 'revelations']],
+  ];
+
+  const map = {};
+  spec.forEach(function (entry) {
+    map[entry[0]] = entry[0];
+    entry[1].forEach(function (alias) { map[alias] = entry[0]; });
+  });
+  return map;
+})();
+
+// Aliases that need rewriting, longest first so "1 cor" wins over a bare
+// "cor" and "song of solomon" is not eaten by a shorter match.
+const BIBLE_ALIASES = Object.keys(BIBLE_BOOKS)
+  .filter(function (a) { return BIBLE_BOOKS[a] !== a; })
+  .sort(function (a, b) { return b.length - a.length; });
+
+// Words spoken between the numbers of a reference that carry no meaning
+// once the numbers line up: "exodus nineteen five to six".
+const REF_CONNECTORS = new Set(['to', 'through', 'thru', 'and']);
+const REF_LABELS     = new Set(['chapter', 'chapters', 'verse', 'verses', 'v', 'vv']);
+
+/**
+ * Rewrite every scripture reference in an already-normalised string into
+ * one canonical shape: full book name followed by its numbers, single
+ * spaced. "rv 3 12" and "revelation chapter 3 verse 12" both land on
+ * "revelation 3 12", which makes them comparable as plain tokens.
+ */
+function canonicalizeRefs(normalized) {
+  let s = ' ' + normalized + ' ';
+
+  BIBLE_ALIASES.forEach(function (alias) {
+    const rx = new RegExp('(^|\\s)' + alias.replace(/ /g, '\\s+') + '(?=\\s)', 'g');
+    s = s.replace(rx, '$1' + BIBLE_BOOKS[alias]);
+  });
+
+  // Drop chapter/verse labels, and connectors sitting between two numbers.
+  const words = s.trim().split(/\s+/).filter(Boolean);
+  const out   = [];
+  words.forEach(function (w, i) {
+    if (REF_LABELS.has(w)) return;
+    if (REF_CONNECTORS.has(w)) {
+      const prev = out[out.length - 1];
+      const next = words[i + 1];
+      if (prev && /^\d+$/.test(prev) && next && /^\d+$/.test(next)) return;
+    }
+    out.push(w);
+  });
+
+  return out.join(' ').trim();
+}
+
+/** Pull the canonical references out of a string, e.g. ["revelation 3 12"]. */
+function extractRefs(canonical) {
+  const words = canonical.split(' ');
+  const refs  = [];
+
+  for (let i = 0; i < words.length; i++) {
+    // A canonical book name is one or two words ("1 corinthians").
+    let book = null;
+    let len  = 0;
+    const two = words[i] + ' ' + (words[i + 1] || '');
+    if (BIBLE_BOOKS[two] === two) { book = two; len = 2; }
+    else if (BIBLE_BOOKS[words[i]] === words[i]) { book = words[i]; len = 1; }
+    if (!book) continue;
+
+    const nums = [];
+    let j = i + len;
+    while (j < words.length && /^\d+$/.test(words[j])) { nums.push(words[j]); j++; }
+    if (nums.length) refs.push(book + ' ' + nums.join(' '));
+    i = j - 1;
+  }
+
+  return refs;
+}
+
+/* ─── Grading a spoken answer ───────────────────────── */
+
+// Words that carry no marks. Kept deliberately small: in this exam data
+// words like "not", "no" and "who" flip an answer's meaning, so they stay.
+const ANSWER_STOPWORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'of', 'to', 'in', 'on', 'at', 'by', 'for',
+  'with', 'from', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'that', 'this', 'these', 'those', 'it', 'its', 'they', 'them', 'their',
+  'he', 'she', 'his', 'her', 'we', 'our', 'you', 'your', 'i', 'my',
+  'will', 'would', 'shall', 'should', 'can', 'could', 'may', 'might',
+  'do', 'does', 'did', 'has', 'have', 'had', 'there', 'then', 'than',
+]);
+
+/** Crude suffix stemmer — enough to let "kingdoms" match "kingdom". */
+function stemWord(w) {
+  if (w.length <= 3) return w;
+  if (w.endsWith('ies') && w.length > 4) return w.slice(0, -3) + 'y';
+  if (w.endsWith('sses') || w.endsWith('shes') || w.endsWith('ches')) return w.slice(0, -2);
+  if (w.endsWith('es') && w.length > 4) return w.slice(0, -2);
+  if (w.endsWith('s') && !w.endsWith('ss')) return w.slice(0, -1);
+  if (w.endsWith('ing') && w.length > 5) return w.slice(0, -3);
+  if (w.endsWith('ed') && w.length > 4) return w.slice(0, -2);
+  return w;
+}
+
+/**
+ * Two words count as the same word if they match outright, share a stem,
+ * or are within a typo of each other — recognisers routinely return
+ * "prophesy" for "prophecy" and "gentile" for "gentiles".
+ */
+function wordsMatch(a, b) {
+  if (a === b) return true;
+  if (stemWord(a) === stemWord(b)) return true;
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen <= 3) return false;
+  return levenshtein(a, b) <= (maxLen <= 5 ? 1 : 2);
+}
+
+function contentWords(canonical) {
+  return canonical.split(' ').filter(function (w) {
+    return w && !ANSWER_STOPWORDS.has(w);
+  });
+}
+
+/**
+ * Score a spoken answer against a stored one, 0..1, by how much of the
+ * correct answer's content came back. Recall rather than exact match:
+ * saying it in a different order, or padding it with extra words, is how
+ * people talk and should not cost marks — but leaving half of it out should.
+ */
+function answerCoverage(spokenWords, correctWords) {
+  if (correctWords.length === 0) return spokenWords.length === 0 ? 1 : 0;
+
+  const pool = spokenWords.slice();
+  let hits   = 0;
+
+  correctWords.forEach(function (want) {
+    for (let i = 0; i < pool.length; i++) {
+      if (wordsMatch(want, pool[i])) {
+        pool.splice(i, 1); // consume it, so one word cannot cover two
+        hits++;
+        return;
+      }
+    }
+  });
+
+  return hits / correctWords.length;
+}
+
+/**
+ * Grade one spoken answer part.
+ * Returns { verdict: 'correct' | 'close' | 'wrong', coverage, missing }.
+ *
+ * "close" exists because speech grading is not certain enough to call a
+ * near miss wrong outright — the session reads the real answer back and
+ * lets the user hear the difference instead.
+ */
+function matchSpokenAnswer(spoken, correct) {
+  const spokenNorm  = canonicalizeRefs(normalizeSpeech(spoken));
+  const correctNorm = canonicalizeRefs(normalizeSpeech(correct));
+
+  if (!spokenNorm) return { verdict: 'wrong', coverage: 0, missing: contentWords(correctNorm) };
+
+  const wantRefs = extractRefs(correctNorm);
+  const gotRefs  = extractRefs(spokenNorm);
+
+  let refsOk = true;
+  if (wantRefs.length) {
+    refsOk = wantRefs.every(function (want) {
+      return gotRefs.some(function (got) {
+        // Chapter must be right; a verse range read short still counts.
+        const w = want.split(' ');
+        const g = got.split(' ');
+        if (w[0] !== g[0] || w[1] !== g[1]) return false;
+        return w.length <= 2 || g.length <= 2 || w[2] === g[2];
+      });
+    });
+  }
+
+  // Typed-trainer equality still counts, so a crisply dictated short answer
+  // is graded exactly as it would be in the Practice tab. References are
+  // held back from that shortcut on purpose: "Rv 3:12" and "Rv 3:13" are a
+  // single edit apart, well inside the 10% the typed grader forgives, and
+  // they are not the same verse.
+  if (spokenNorm === correctNorm || (refsOk && answersMatch(spokenNorm, correctNorm))) {
+    return { verdict: 'correct', coverage: 1, missing: [] };
+  }
+
+  const wantWords = contentWords(correctNorm);
+  const gotWords  = contentWords(spokenNorm);
+
+  // A part that is nothing but a reference is graded on the reference.
+  const refWordCount = wantRefs.reduce(function (n, r) { return n + r.split(' ').length; }, 0);
+  if (wantRefs.length && refWordCount >= wantWords.length - 1) {
+    return {
+      verdict:  refsOk ? 'correct' : 'wrong',
+      coverage: refsOk ? 1 : 0,
+      missing:  refsOk ? [] : wantRefs,
+    };
+  }
+
+  const coverage = answerCoverage(gotWords, wantWords);
+  const missing  = wantWords.filter(function (want) {
+    return !gotWords.some(function (got) { return wordsMatch(want, got); });
+  });
+
+  // Short answers are all content: getting one of two words is not a pass.
+  const bar = wantWords.length <= 3 ? 0.99 : 0.7;
+
+  // A generous "close" band is deliberate: it still reads the real answer
+  // back and still does not count as correct, so the only cost of being
+  // lenient here is a gentler word for a miss.
+  let verdict;
+  if (coverage >= bar && refsOk)      verdict = 'correct';
+  else if (coverage >= 0.35)          verdict = 'close';
+  else                                verdict = 'wrong';
+
+  return { verdict: verdict, coverage: coverage, missing: missing };
+}
+
+/* ─── Voice commands ────────────────────────────────── */
+
+// Politeness and address that can wrap any command.
+const COMMAND_TRIM = /^(?:ok|okay|hey|please|app|computer|now)\s+|\s+(?:please|now|app)$/g;
+
+const VOICE_COMMANDS = [
+  { id: 'answer', phrases: [
+    'what is the answer', 'what s the answer', 'whats the answer',
+    'what was the answer', 'tell me the answer', 'give me the answer',
+    'show me the answer', 'the answer', 'answer', 'i don t know',
+    'i dont know', 'no idea', 'pass',
+  ] },
+  { id: 'next', phrases: [
+    'next question', 'next', 'skip', 'skip question', 'skip this',
+    'move on', 'next one', 'go on',
+  ] },
+  { id: 'repeat', phrases: [
+    'repeat question', 'repeat the question', 'repeat', 'say again',
+    'say that again', 'again', 'come again', 'read it again', 'once more',
+  ] },
+  { id: 'stop', phrases: [
+    'stop', 'stop practice', 'stop practising', 'end session', 'end practice',
+    'exit', 'quit', 'finish', 'i m done', 'im done', 'that s enough',
+  ] },
+];
+
+function normalizeCommand(text) {
+  let s = spokenNumbersToDigits(normalizeAnswer(text));
+  let prev;
+  do { prev = s; s = s.replace(COMMAND_TRIM, '').trim(); } while (s !== prev);
+  return s;
+}
+
+/**
+ * Recognise a command in a spoken utterance, tolerating the near misses a
+ * recogniser produces ("what's the answer" / "what is the answer" /
+ * "whats the answer"). Matched against the *whole* utterance rather than
+ * searched inside it, so an answer that happens to contain "next" is still
+ * graded as an answer.
+ */
+function matchCommand(text) {
+  const s = normalizeCommand(text);
+  if (!s) return null;
+
+  let best     = null;
+  let bestSim  = 0;
+
+  VOICE_COMMANDS.forEach(function (cmd) {
+    cmd.phrases.forEach(function (phrase) {
+      const maxLen = Math.max(s.length, phrase.length);
+      const sim    = maxLen === 0 ? 0 : 1 - (levenshtein(s, phrase) / maxLen);
+      if (sim > bestSim) { bestSim = sim; best = cmd.id; }
+    });
+  });
+
+  // 0.82 accepts a syllable or two of slop on a short phrase without
+  // letting a genuine one-line answer trip a command.
+  return bestSim >= 0.82 ? best : null;
+}
+
+/* ─── Speech out (TTS) ──────────────────────────────── */
+
+const Speaker = (function () {
+  const synth = window.speechSynthesis;
+  let voice   = null;
+
+  function supported() { return !!synth; }
+
+  /**
+   * Prefer a voice that lives on the device (localService), since the
+   * whole point is to work with no connection. Falls back to any English
+   * voice, then to whatever the platform defaults to.
+   */
+  function pickVoice() {
+    if (!supported()) return;
+    const voices = synth.getVoices();
+    if (!voices.length) return;
+
+    const english = voices.filter(function (v) { return /^en(-|_|$)/i.test(v.lang); });
+    const pool    = english.length ? english : voices;
+
+    voice = pool.find(function (v) { return v.localService; }) || pool[0] || null;
+  }
+
+  if (supported()) {
+    pickVoice();
+    synth.addEventListener('voiceschanged', pickVoice);
+  }
+
+  /**
+   * Long utterances get silently truncated by some engines, so text is
+   * spoken a sentence at a time and the promise settles when the last
+   * chunk ends. Resolves (rather than rejects) on error so a wobbly voice
+   * engine can never wedge the session loop.
+   */
+  function speak(text, opts) {
+    const options = opts || {};
+    if (!supported() || !text) return Promise.resolve();
+
+    const chunks = chunkForSpeech(String(text));
+
+    return chunks.reduce(function (chain, chunk) {
+      return chain.then(function () {
+        return new Promise(function (resolve) {
+          const u = new SpeechSynthesisUtterance(chunk);
+          if (voice) u.voice = voice;
+          u.lang   = (voice && voice.lang) || 'en-US';
+          u.rate   = options.rate || 1;
+          u.pitch  = options.pitch || 1;
+          u.volume = 1;
+
+          let settled = false;
+          let watchdog = null;
+          const done = function () {
+            if (settled) return;
+            settled = true;
+            clearTimeout(watchdog);
+            resolve();
+          };
+          u.onend   = done;
+          u.onerror = done;
+
+          synth.speak(u);
+
+          // Some engines drop an utterance without firing either event —
+          // never fire onend, and the session loop waits on it forever.
+          // Roughly 15 characters a second, doubled, plus slack.
+          watchdog = setTimeout(done, (chunk.length / 15) * 2000 + 5000);
+        });
+      });
+    }, Promise.resolve());
+  }
+
+  function cancel() {
+    if (supported()) synth.cancel();
+  }
+
+  return { supported: supported, speak: speak, cancel: cancel };
+})();
+
+/**
+ * Split on sentence ends, then on length, so no single utterance runs long.
+ * Written without a lookbehind on purpose: that is a parse-time syntax error
+ * on older iOS Safari, which would take the whole file down with it.
+ */
+function chunkForSpeech(text) {
+  const MAX  = 180;
+  const out  = [];
+
+  // Each match is a run of non-terminators plus the terminators ending it.
+  const sentences = text.match(/[^.!?;]+[.!?;]*/g) || [text];
+
+  sentences.forEach(function (sentence) {
+    let s = sentence.trim();
+    if (!s) return;
+    while (s.length > MAX) {
+      let cut = s.lastIndexOf(' ', MAX);
+      if (cut < MAX * 0.5) cut = MAX;
+      out.push(s.slice(0, cut).trim());
+      s = s.slice(cut).trim();
+    }
+    if (s) out.push(s);
+  });
+
+  return out.length ? out : [text];
+}
+
+/**
+ * Read an answer the way it should sound. References are stored the way
+ * they are written — "Mt 17:27" — which a speech engine says as "M T
+ * seventeen twenty-seven", like a clock time. Expanded here so the answer
+ * you hear is the answer you would have said.
+ */
+function speakableAnswer(text) {
+  const ORDINALS = { '1': 'First', '2': 'Second', '3': 'Third' };
+
+  function bookName(numPart, bookPart) {
+    const key = ((numPart ? numPart.trim() + ' ' : '') + bookPart).toLowerCase().trim();
+    const canonical = BIBLE_BOOKS[key];
+    if (!canonical) return null;
+    return canonical
+      .replace(/^([123]) /, function (_m, d) { return ORDINALS[d] + ' '; })
+      .replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); });
+  }
+
+  let s = String(text || '');
+
+  // "Ex 19:5-6" -> "Exodus 19 verse 5 to 6"
+  s = s.replace(
+    /\b([123]\s*)?([A-Za-z]{2,14})\.?\s*(\d+)\s*:\s*(\d+)(?:\s*[-–—]\s*(\d+))?/g,
+    function (m, numPart, bookPart, chap, v1, v2) {
+      const name = bookName(numPart, bookPart);
+      if (!name) return m;
+      return name + ' ' + chap + ' verse ' + v1 + (v2 ? ' to ' + v2 : '');
+    }
+  );
+
+  // "Rv 4" -> "Revelation 4". Abbreviations only: a book already spelled
+  // out reads correctly, and expanding bare words would catch prose.
+  s = s.replace(
+    /\b([123]\s*)?([A-Za-z]{2,6})\.\s*(\d+)\b|\b([123]\s*)?([A-Za-z]{2,4})\s+(\d+)\b/g,
+    function (m, n1, b1, c1, n2, b2, c2) {
+      const numPart  = n1 || n2;
+      const bookPart = b1 || b2;
+      const chap     = c1 || c2;
+      const key = ((numPart ? numPart.trim() + ' ' : '') + bookPart).toLowerCase().trim();
+      if (!BIBLE_BOOKS[key] || BIBLE_BOOKS[key] === key) return m; // canonical already
+      return bookName(numPart, bookPart) + ' ' + chap;
+    }
+  );
+
+  return s;
+}
+
+/**
+ * Read a question the way it should sound: blanks become the word "blank",
+ * and the "Question 4 — " prefix the data carries is dropped, since the
+ * session announces its own position in the set.
+ */
+function speakableQuestion(text) {
+  return String(text || '')
+    .replace(/\[\[(.+?)\]\]/g, ' blank ')
+    .replace(/_{2,}/g, ' blank ')
+    .replace(/^\s*Question\s+\d+\s*[—–-]\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/* ─── Speech in (STT) ───────────────────────────────── */
+
+/**
+ * Speech-to-text engine interface.
+ *
+ *   name                 label for the UI
+ *   isSupported()        -> bool
+ *   prepare()            -> Promise<{ offline: bool }>
+ *   start(handlers)      handlers: { onResult(text, isFinal), onError(code) }
+ *   stop()               stop listening, keep the engine warm
+ *
+ * Swapping in a bundled offline recogniser (Vosk/Kaldi compiled to WASM,
+ * ~40MB for the small English model) means writing another object with
+ * these methods and returning it from createSttEngine() — the session
+ * loop, the command grammar and the grader are all engine-agnostic.
+ */
+/* ─── Choosing an engine ────────────────────────────── */
+
+/**
+ * Pick the recogniser for a session.
+ *
+ * "auto" prefers the offline engine whenever its model is already on the
+ * device, because that is the only one that survives a tunnel. Without the
+ * model it falls back to the browser's own recogniser, which is accurate
+ * and free but needs a connection on Android.
+ */
+function createSttEngine() {
+  const pref = localStorage.getItem(KEYS.sttEngine) || 'auto';
+
+  if (pref === 'webspeech') return new WebSpeechEngine();
+
+  if (pref === 'vosk' || voskModelReady()) {
+    const vosk = new VoskEngine();
+    if (vosk.isSupported()) return vosk;
+  }
+
+  return new WebSpeechEngine();
+}
+
+/**
+ * Built-in Web Speech recogniser.
+ *
+ * Offline caveat: on desktop Chrome 139+ this can run entirely on-device
+ * (processLocally), which prepare() opts into when the language pack is
+ * available. Chrome on Android has no on-device path — processLocally,
+ * available() and install() are all unimplemented there — so on a phone
+ * this engine sends audio to Google and needs a connection. That is the
+ * gap the Vosk engine is meant to close.
+ */
+function WebSpeechEngine() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  this.name       = 'Browser speech recognition';
+  this.offline    = false;
+  this._recog     = null;
+  this._want      = false;
+  this._handlers  = null;
+  this._restartAt = 0;
+  this._Recognition = Recognition;
+}
+
+WebSpeechEngine.prototype.isSupported = function () {
+  return !!this._Recognition;
+};
+
+WebSpeechEngine.prototype.prepare = function () {
+  const self = this;
+  const R    = this._Recognition;
+
+  if (!R || typeof R.available !== 'function') {
+    return Promise.resolve({ offline: false });
+  }
+
+  // On-device support is desktop-Chrome-only today; everywhere else this
+  // resolves 'unavailable' and we quietly stay on the networked path.
+  return R.available({ langs: ['en-US'], processLocally: true })
+    .then(function (state) {
+      if (state === 'available') { self.offline = true; return { offline: true }; }
+      if (state === 'downloadable' && typeof R.install === 'function') {
+        return R.install({ langs: ['en-US'], processLocally: true })
+          .then(function (ok) { self.offline = !!ok; return { offline: self.offline }; })
+          .catch(function () { return { offline: false }; });
+      }
+      return { offline: false };
+    })
+    .catch(function () { return { offline: false }; });
+};
+
+WebSpeechEngine.prototype.start = function (handlers) {
+  if (!this.isSupported()) {
+    handlers.onError('unsupported');
+    return;
+  }
+  this._handlers = handlers;
+  this._want     = true;
+  this._spin();
+};
+
+WebSpeechEngine.prototype._spin = function () {
+  const self = this;
+  if (!this._want || this._recog) return;
+
+  const recog = new this._Recognition();
+  recog.lang            = 'en-US';
+  recog.interimResults  = true;
+  recog.maxAlternatives = 3;
+  // Has no effect on Chrome for Android, which is why onend restarts below.
+  recog.continuous      = true;
+  if (this.offline) {
+    try { recog.processLocally = true; } catch (e) { /* not supported here */ }
+  }
+
+  recog.onresult = function (event) {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      // Alternatives are passed through so the caller can accept any of
+      // them — a command is often the recogniser's second guess.
+      const texts = [];
+      for (let a = 0; a < result.length; a++) texts.push(result[a].transcript);
+      self._handlers.onResult(texts, result.isFinal);
+    }
+  };
+
+  recog.onerror = function (event) {
+    const code = event.error;
+    if (code === 'aborted') return;              // our own stop()
+    if (code === 'no-speech') return;            // silence; onend respins
+    self._handlers.onError(code);
+    if (code === 'not-allowed' || code === 'service-not-allowed') {
+      self._want = false;
+    }
+  };
+
+  recog.onend = function () {
+    self._recog = null;
+    if (!self._want) return;
+
+    // Android ignores `continuous`, so recognition ends after every
+    // utterance and has to be restarted to stay always-listening. The
+    // floor stops a failing engine from spinning hot.
+    const wait = Math.max(0, 250 - (Date.now() - self._restartAt));
+    self._restartAt = Date.now();
+    setTimeout(function () { self._spin(); }, wait);
+  };
+
+  this._recog = recog;
+  try {
+    recog.start();
+  } catch (e) {
+    // start() throws if a previous instance is still winding down.
+    this._recog = null;
+    setTimeout(function () { self._spin(); }, 250);
+  }
+};
+
+WebSpeechEngine.prototype.stop = function () {
+  this._want = false;
+  if (this._recog) {
+    try { this._recog.abort(); } catch (e) { /* already gone */ }
+    this._recog = null;
+  }
+};
+
+/** Nothing is held open between sessions, so releasing is just stopping. */
+WebSpeechEngine.prototype.release = function () {
+  this.stop();
+};
+
+/* ─── Offline engine (Vosk / Kaldi via WebAssembly) ─── */
+
+const VOSK_LIB_URL     = './vendor/vosk/vosk.js';
+const VOSK_WORKLET_URL = './vendor/vosk/mic-worklet.js';
+
+// Deliberately NOT prefixed "examtrainer-": the service worker deletes every
+// cache with that prefix when its version is bumped, and re-downloading 39MB
+// on each deploy would defeat the point of keeping the model on the device.
+const VOSK_CACHE  = 'vosk-model-v1';
+const VOSK_KEY    = './vosk-model.tar.gz'; // synthetic cache key, never fetched
+
+/**
+ * Where the model comes from the first time. vosk-browser wants a gzipped
+ * tar of the model folder; the official alphacephei downloads are .zip and
+ * send no CORS header, so they cannot be fetched from a page. The library
+ * author's own build is the right shape and allows cross-origin reads.
+ * Override in config.js to self-host it alongside the app.
+ */
+function voskModelUrl() {
+  const cfg = window.AUDIO_CONFIG || {};
+  return cfg.voskModelUrl ||
+    'https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-en-us-0.15.tar.gz';
+}
+
+/** Load the library on demand — 5.8MB has no business in a cold start. */
+let _voskLibPromise = null;
+function loadVoskLib() {
+  if (window.Vosk) return Promise.resolve(window.Vosk);
+  if (_voskLibPromise) return _voskLibPromise;
+
+  _voskLibPromise = new Promise(function (resolve, reject) {
+    const tag = document.createElement('script');
+    tag.src   = VOSK_LIB_URL;
+    tag.async = true;
+    tag.onload  = function () {
+      window.Vosk ? resolve(window.Vosk) : reject(new Error('vosk-lib-missing'));
+    };
+    tag.onerror = function () {
+      _voskLibPromise = null;
+      reject(new Error('vosk-lib-unreachable'));
+    };
+    document.head.appendChild(tag);
+  });
+
+  return _voskLibPromise;
+}
+
+/** True once the model bytes are on the device and usable with no network. */
+function voskModelReady() {
+  return localStorage.getItem(KEYS.voskModel) === 'ready';
+}
+
+function openVoskCache() {
+  return window.caches ? caches.open(VOSK_CACHE) : Promise.reject(new Error('no-cache-storage'));
+}
+
+/**
+ * Fetch the model once and keep the bytes in Cache Storage. Reports progress
+ * so a 39MB download over a phone connection does not look like a hang.
+ * Everything after this runs with no network at all.
+ */
+function downloadVoskModel(onProgress) {
+  return openVoskCache().then(function (cache) {
+    return fetch(voskModelUrl()).then(function (res) {
+      if (!res.ok) throw new Error('model-http-' + res.status);
+
+      const total  = Number(res.headers.get('Content-Length')) || 0;
+      // No readable stream (or no length) still works, just without a bar.
+      if (!res.body || !res.body.getReader) {
+        return res.blob().then(function (blob) { return blob; });
+      }
+
+      const reader = res.body.getReader();
+      const chunks = [];
+      let loaded   = 0;
+
+      return (function pump() {
+        return reader.read().then(function (step) {
+          if (step.done) return new Blob(chunks, { type: 'application/gzip' });
+          chunks.push(step.value);
+          loaded += step.value.length;
+          if (onProgress) onProgress(loaded, total);
+          return pump();
+        });
+      })();
+    }).then(function (blob) {
+      return cache.put(VOSK_KEY, new Response(blob, {
+        headers: { 'Content-Type': 'application/gzip' },
+      }));
+    }).then(function () {
+      localStorage.setItem(KEYS.voskModel, 'ready');
+    });
+  });
+}
+
+function deleteVoskModel() {
+  localStorage.removeItem(KEYS.voskModel);
+  return window.caches ? caches.delete(VOSK_CACHE) : Promise.resolve(false);
+}
+
+/**
+ * Fully offline recogniser: Kaldi compiled to WebAssembly, running the small
+ * English model in a worker. Unlike the browser's own recogniser this never
+ * touches the network once the model is on the device, and it keeps
+ * recognising continuously rather than stopping after each utterance.
+ */
+function VoskEngine() {
+  this.name    = 'Offline recognition (Vosk)';
+  this.offline = true;
+
+  this._model      = null;
+  this._recognizer = null;
+  this._stream     = null;
+  this._ctx        = null;
+  this._nodes      = [];
+  this._feeding    = false;
+  this._handlers   = null;
+  this._lastPartial = '';
+}
+
+VoskEngine.prototype.isSupported = function () {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
+            (window.AudioContext || window.webkitAudioContext) &&
+            window.WebAssembly && window.caches);
+};
+
+VoskEngine.prototype.prepare = function () {
+  const self = this;
+  if (this._recognizer) return Promise.resolve({ offline: true });
+
+  return loadVoskLib().then(function (Vosk) {
+    return openVoskCache()
+      .then(function (cache) { return cache.match(VOSK_KEY); })
+      .then(function (hit) {
+        if (!hit) throw new Error('model-not-downloaded');
+        return hit.blob();
+      })
+      .then(function (blob) {
+        // Handing the worker a blob: URL keeps model loading off the network
+        // entirely — no fetch to intercept, nothing to go wrong in a tunnel.
+        return loadVoskModel(Vosk, URL.createObjectURL(blob));
+      })
+      .then(function (model) {
+        self._model = model;
+        return { offline: true };
+      });
+  });
+};
+
+/**
+ * Bring up a model and settle either way.
+ *
+ * Not Vosk.createModel(): that waits only for the success event, so a
+ * truncated or corrupt download leaves its promise pending forever and the
+ * session sits on "Speaking…" with no error and no fallback. The underlying
+ * Model does emit 'error', so listen for both — and still cap it with a
+ * timeout, since a worker that dies quietly emits neither.
+ */
+function loadVoskModel(Vosk, url, timeoutMs) {
+  return new Promise(function (resolve, reject) {
+    let model   = null;
+    let settled = false;
+
+    const finish = function (err, value, workerDead) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      // Free the worker, but not when the load itself failed: tearing down a
+      // model that never came up throws from inside the library, on a promise
+      // we do not own, and surfaces as an unhandled rejection.
+      if (err && model && !workerDead) {
+        try { model.terminate(); } catch (e) { /* already gone */ }
+      }
+      err ? reject(err) : resolve(value);
+    };
+
+    // Generous: a 39MB Kaldi model on a mid-range phone is not quick.
+    const timer = setTimeout(function () {
+      finish(new Error('model-load-timeout'));
+    }, timeoutMs || 90000);
+
+    try {
+      model = new Vosk.Model(url);
+    } catch (e) {
+      finish(new Error('model-load-failed'));
+      return;
+    }
+
+    model.on('load', function (msg) {
+      if (msg && msg.result === false) finish(new Error('model-load-failed'));
+      else finish(null, model);
+    });
+
+    model.on('error', function () {
+      finish(new Error('model-corrupt'), null, true);
+    });
+  });
+}
+
+VoskEngine.prototype.start = function (handlers) {
+  const self = this;
+  this._handlers = handlers;
+
+  // Already wired up from an earlier turn of the loop: just unmute.
+  if (this._recognizer && this._ctx) {
+    this._lastPartial = '';
+    this._feeding = true;
+    if (this._ctx.state === 'suspended') this._ctx.resume();
+    return;
+  }
+
+  const constraints = {
+    video: false,
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  };
+
+  navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
+    self._stream = stream;
+
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    // The model is trained at 16kHz; asking the graph for that rate avoids a
+    // resampling step. Not every browser honours it, hence the fallback.
+    try { self._ctx = new Ctx({ sampleRate: 16000 }); }
+    catch (e) { self._ctx = new Ctx(); }
+
+    const rate = self._ctx.sampleRate;
+    self._recognizer = new self._model.KaldiRecognizer(rate);
+
+    self._recognizer.on('result', function (msg) {
+      const text = msg && msg.result && msg.result.text;
+      if (!text || !self._feeding) return;
+      self._lastPartial = '';
+      self._handlers.onResult([text], true);
+    });
+
+    self._recognizer.on('partialresult', function (msg) {
+      const partial = msg && msg.result && msg.result.partial;
+      if (!partial || !self._feeding || partial === self._lastPartial) return;
+      self._lastPartial = partial;
+      self._handlers.onResult([partial], false);
+    });
+
+    self._recognizer.on('error', function (msg) {
+      self._handlers.onError('vosk-' + ((msg && msg.error) || 'unknown'));
+    });
+
+    self._feeding = true;
+    self._wireAudio(stream).catch(function () {
+      self._handlers.onError('audio-graph');
+    });
+  }).catch(function (err) {
+    const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
+    self._handlers.onError(denied ? 'not-allowed' : 'audio-capture');
+  });
+};
+
+/**
+ * Feed the microphone into the recogniser. Preferred path is an
+ * AudioWorklet; ScriptProcessorNode is the fallback for browsers without
+ * one. Either way the tap ends at a silenced gain node — a node has to
+ * reach the destination to be pulled, but routing the microphone to the
+ * speakers would howl.
+ */
+VoskEngine.prototype._wireAudio = function (stream) {
+  const self   = this;
+  const ctx    = this._ctx;
+  const source = ctx.createMediaStreamSource(stream);
+  const sink   = ctx.createGain();
+  sink.gain.value = 0;
+  sink.connect(ctx.destination);
+
+  const feed = function (frame) {
+    if (!self._feeding || !self._recognizer) return;
+    try { self._recognizer.acceptWaveformFloat(frame, ctx.sampleRate); }
+    catch (e) { /* a dropped frame is not worth ending the session over */ }
+  };
+
+  if (ctx.audioWorklet && window.AudioWorkletNode) {
+    return ctx.audioWorklet.addModule(VOSK_WORKLET_URL).then(function () {
+      const node = new AudioWorkletNode(ctx, 'mic-capture');
+      node.port.onmessage = function (e) { feed(e.data); };
+      source.connect(node);
+      node.connect(sink);
+      self._nodes = [source, node, sink];
+    });
+  }
+
+  return new Promise(function (resolve) {
+    const node = ctx.createScriptProcessor(4096, 1, 1);
+    node.onaudioprocess = function (e) { feed(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    source.connect(node);
+    node.connect(sink);
+    self._nodes = [source, node, sink];
+    resolve();
+  });
+};
+
+/** Stop feeding audio but keep the model warm — the loop speaks, then listens again. */
+VoskEngine.prototype.stop = function () {
+  this._feeding = false;
+  this._lastPartial = '';
+};
+
+/** Tear everything down at the end of a session. */
+VoskEngine.prototype.release = function () {
+  this._feeding = false;
+
+  this._nodes.forEach(function (n) {
+    if (n.port) n.port.onmessage = null;   // worklet node
+    if (n.onaudioprocess) n.onaudioprocess = null; // script processor
+    try { n.disconnect(); } catch (e) { /* gone */ }
+  });
+  this._nodes = [];
+
+  if (this._stream) {
+    this._stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) { /* gone */ } });
+    this._stream = null;
+  }
+  if (this._ctx) { try { this._ctx.close(); } catch (e) { /* already closed */ } this._ctx = null; }
+  if (this._recognizer) { try { this._recognizer.remove(); } catch (e) { /* gone */ } this._recognizer = null; }
+  if (this._model) { try { this._model.terminate(); } catch (e) { /* gone */ } this._model = null; }
+};
+
+/* ─── Session ───────────────────────────────────────── */
+
+const AudioPractice = (function () {
+  let engine    = null;
+  let queue     = [];     // one entry per answer part, in asking order
+  let cursor    = 0;
+  let phase     = 'idle'; // idle | speaking | listening | judging | done
+  let tally     = { correct: 0, close: 0, wrong: 0 };
+  let wakeLock  = null;
+  let nudged    = false;
+  let silenceTimer = null;
+
+  /* — view helpers — */
+
+  function setPhase(next) {
+    phase = next;
+    const orb   = $('audio-orb');
+    const label = $('audio-state-label');
+    if (!orb) return;
+
+    orb.className = 'audio-orb audio-orb-' + next;
+    label.textContent =
+      next === 'speaking'  ? 'Speaking…'  :
+      next === 'listening' ? 'Listening…' :
+      next === 'judging'   ? 'Checking…'  :
+      next === 'done'      ? 'Finished'   : '';
+  }
+
+  function setNotice(msg, kind) {
+    const el = $('audio-notice');
+    el.textContent = msg || '';
+    el.className = 'audio-notice' + (msg ? '' : ' hidden') + (kind ? ' audio-notice-' + kind : '');
+  }
+
+  function setHeard(text) {
+    const el = $('audio-heard');
+    el.textContent = text || '';
+    el.classList.toggle('hidden', !text);
+  }
+
+  function setVerdict(kind, text) {
+    const el = $('audio-verdict');
+    el.textContent = text || '';
+    el.className = 'audio-verdict' + (text ? '' : ' hidden') + (kind ? ' audio-verdict-' + kind : '');
+  }
+
+  function current() { return queue[cursor] || null; }
+
+  function render() {
+    const item = current();
+    if (!item) return;
+
+    $('audio-progress').textContent = (cursor + 1) + ' / ' + queue.length;
+    $('audio-question').textContent = speakableQuestion(item.q.question);
+
+    const part = $('audio-part');
+    if (item.partsTotal > 1) {
+      part.textContent = 'Part ' + (item.partNumber) + ' of ' + item.partsTotal;
+      part.classList.remove('hidden');
+    } else {
+      part.classList.add('hidden');
+    }
+  }
+
+  /* — the loop — */
+
+  /** Speak, with the microphone closed so the app never hears itself. */
+  function say(text, opts) {
+    stopListening();
+    setPhase('speaking');
+    return Speaker.speak(text, opts);
+  }
+
+  function askCurrent(opts) {
+    const item = current();
+    if (!item) return finish();
+
+    const options = opts || {};
+    render();
+    setVerdict(null, '');
+    setHeard('');
+
+    let intro = '';
+    if (!options.repeat) {
+      intro = item.partNumber === 1
+        ? 'Question ' + (item.questionNumber) + '. '
+        : '';
+    }
+    const partTag = item.partsTotal > 1 ? ' Part ' + item.partNumber + ' of ' + item.partsTotal + '.' : '';
+    const body    = item.partNumber === 1 || options.repeat
+      ? speakableQuestion(item.q.question)
+      : '';
+
+    return say(intro + body + partTag).then(beginListening);
+  }
+
+  function beginListening() {
+    if (phase === 'done') return;
+    setPhase('listening');
+    nudged = false;
+
+    engine.start({
+      onResult: onResult,
+      onError:  onEngineError,
+    });
+
+    armSilenceTimer();
+  }
+
+  function stopListening() {
+    clearTimeout(silenceTimer);
+    if (engine) engine.stop();
+  }
+
+  /**
+   * A commuter needs thinking time, so silence never advances the session
+   * on its own — it just offers the options once, then keeps listening.
+   */
+  function armSilenceTimer() {
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(function () {
+      if (phase !== 'listening' || nudged) return;
+      nudged = true;
+      say('Still listening. Say: what is the answer, next question, or repeat question.')
+        .then(function () { if (phase === 'speaking') beginListening(); });
+    }, 20000);
+  }
+
+  function onResult(alternatives, isFinal) {
+    if (phase !== 'listening') return; // ignore anything caught mid-sentence
+    const best = alternatives[0] || '';
+    setHeard(best);
+    if (!isFinal) return;
+
+    clearTimeout(silenceTimer);
+
+    // A command is often the recogniser's second guess, so every
+    // alternative gets a look before the utterance is graded as an answer.
+    for (let i = 0; i < alternatives.length; i++) {
+      const cmd = matchCommand(alternatives[i]);
+      if (cmd) return runCommand(cmd);
+    }
+
+    judge(best);
+  }
+
+  function runCommand(id) {
+    const item = current();
+
+    if (id === 'repeat') {
+      askCurrent({ repeat: true });
+      return;
+    }
+
+    if (id === 'next') {
+      // Skipped, not failed — an unanswered part scores nothing either way.
+      cursor++;
+      askCurrent();
+      return;
+    }
+
+    if (id === 'stop') {
+      finish();
+      return;
+    }
+
+    if (id === 'answer') {
+      // Reads the answer without marking the part, so the question can
+      // still be attempted afterwards.
+      if (!item) return;
+      setVerdict('revealed', 'Answer: ' + item.correct);
+      say('The answer is. ' + speakableAnswer(item.correct))
+        .then(function () { if (phase === 'speaking') beginListening(); });
+    }
+  }
+
+  function judge(spoken) {
+    const item = current();
+    if (!item) return;
+
+    stopListening();
+    setPhase('judging');
+
+    const result = matchSpokenAnswer(spoken, item.correct);
+    tally[result.verdict]++;
+
+    let spokenBack;
+    if (result.verdict === 'correct') {
+      setVerdict('correct', 'Correct');
+      spokenBack = 'Correct.';
+    } else if (result.verdict === 'close') {
+      setVerdict('close', 'Close — answer: ' + item.correct);
+      spokenBack = 'Close. The answer is. ' + speakableAnswer(item.correct);
+    } else {
+      setVerdict('wrong', 'Incorrect — answer: ' + item.correct);
+      spokenBack = 'Incorrect. The answer is. ' + speakableAnswer(item.correct);
+    }
+
+    say(spokenBack).then(function () {
+      if (phase !== 'speaking') return;
+      cursor++;
+      askCurrent();
+    });
+  }
+
+  function finish() {
+    stopListening();
+    Speaker.cancel();
+    setPhase('done');
+    releaseWakeLock();
+
+    const graded = tally.correct + tally.close + tally.wrong;
+    $('audio-session').classList.add('hidden');
+    $('audio-summary').classList.remove('hidden');
+    $('audio-summary-score').textContent = tally.correct + ' / ' + graded;
+    $('audio-summary-detail').textContent = graded === 0
+      ? 'No answers graded this session.'
+      : tally.correct + ' correct · ' + tally.close + ' close · ' + tally.wrong + ' incorrect';
+
+    // Deliberately not written to attempt history: these are speech-graded
+    // results, and letting them feed Weak Areas would change what the
+    // typed Practice mode shows you.
+    if (graded > 0) {
+      Speaker.speak('Session finished. ' + tally.correct + ' out of ' + graded + ' correct.');
+    }
+  }
+
+  /* — screen wake lock, so a pocketed phone keeps recognising — */
+
+  function requestWakeLock() {
+    if (!navigator.wakeLock) return;
+    navigator.wakeLock.request('screen')
+      .then(function (lock) { wakeLock = lock; })
+      .catch(function () { /* denied or unsupported; not fatal */ });
+  }
+
+  function releaseWakeLock() {
+    if (!wakeLock) return;
+    try { wakeLock.release(); } catch (e) { /* already released */ }
+    wakeLock = null;
+  }
+
+  /* — errors — */
+
+  function onEngineError(code) {
+    if (code === 'not-allowed' || code === 'service-not-allowed') {
+      setNotice('Microphone access was denied. Allow it in your browser’s site settings, then start audio practice again.', 'error');
+      setPhase('idle');
+      stopListening();
+      return;
+    }
+    if (code === 'network') {
+      setNotice('Speech recognition needs a connection on this device — the browser’s recogniser is not on-device here.', 'error');
+      return;
+    }
+    if (code === 'unsupported') {
+      setNotice('This browser has no speech recognition. Try Chrome.', 'error');
+      setPhase('idle');
+      return;
+    }
+    setNotice('Speech recognition error: ' + code, 'error');
+  }
+
+  /* — entry / exit — */
+
+  function buildQueue() {
+    const items = [];
+    currentQuestions.forEach(function (q, qi) {
+      const parts = activeParts[q.id] || q.correct.map(function (_, pi) { return pi; });
+      parts.forEach(function (pi, n) {
+        items.push({
+          q:              q,
+          questionNumber: qi + 1,
+          partNumber:     n + 1,
+          partsTotal:     parts.length,
+          correct:        q.correct[pi],
+        });
+      });
+    });
+    return items;
+  }
+
+  /**
+   * Ask for the microphone up front rather than letting recognition raise
+   * the prompt mid-sentence, so a denial can be explained clearly instead
+   * of surfacing as a bare error code.
+   */
+  function ensureMicPermission() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return Promise.resolve(true); // recogniser will raise its own prompt
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(function (stream) {
+        stream.getTracks().forEach(function (t) { t.stop() });
+        return true;
+      })
+      .catch(function () { return false; });
+  }
+
+  function start() {
+    const exam = getActiveExam();
+    if (!exam) return;
+
+    if (!Speaker.supported()) {
+      showConfirm('This browser cannot speak text aloud, so audio practice will not work here.', 'OK', function () {});
+      return;
+    }
+
+    engine = createSttEngine();
+    if (!engine.isSupported()) {
+      showConfirm('This browser has no speech recognition. Audio practice needs Chrome (desktop or Android).', 'OK', function () {});
+      return;
+    }
+
+    queue  = buildQueue();
+    if (!queue.length) {
+      showInlineNotice('Nothing to practise — pick some questions first.');
+      return;
+    }
+
+    cursor = 0;
+    tally  = { correct: 0, close: 0, wrong: 0 };
+
+    openView();
+    setNotice('', null);
+    setPhase('speaking');
+
+    ensureMicPermission().then(function (granted) {
+      if (!granted) {
+        onEngineError('not-allowed');
+        return;
+      }
+      requestWakeLock();
+      return prepareEngine().then(function (info) {
+        showEngineNote(info.offline);
+        return say('Audio practice. ' + queue.length + ' to answer. Say next question, repeat question, or what is the answer, at any time.')
+          .then(askCurrent);
+      });
+    });
+  }
+
+  /**
+   * Get the chosen engine ready, and fall back to the browser recogniser if
+   * the offline one cannot start — a cleared cache or a half-finished
+   * download should cost you the offline guarantee, not the session.
+   */
+  function prepareEngine() {
+    return engine.prepare().catch(function (err) {
+      if (engine instanceof WebSpeechEngine) throw err;
+
+      // Anything that says the model itself is unusable clears the "ready"
+      // flag, so the next session does not try it again and stall on the
+      // same failure. A missing library is a different matter -- that is a
+      // network problem and the model on disk is probably fine.
+      const reason = (err && err.message) || 'unknown';
+      const modelUnusable = reason === 'model-not-downloaded' ||
+                            reason === 'model-corrupt' ||
+                            reason === 'model-load-failed' ||
+                            reason === 'model-load-timeout';
+      if (modelUnusable) localStorage.removeItem(KEYS.voskModel);
+
+      const fallback = new WebSpeechEngine();
+      if (!fallback.isSupported()) throw err;
+
+      if (engine.release) engine.release();
+      engine = fallback;
+      setNotice('Offline recognition is not set up on this device — using the browser recogniser, which needs a connection.', null);
+      return engine.prepare();
+    });
+  }
+
+  /**
+   * Say which recogniser is running, and — when it is the online one —
+   * offer the download that makes the next session work in a tunnel.
+   */
+  function showEngineNote(offline) {
+    $('audio-engine-note').textContent = offline
+      ? 'On-device recognition · works offline'
+      : 'Browser recognition · needs a connection on this device';
+
+    const setup = $('btn-audio-offline');
+    const canOffline = !offline && new VoskEngine().isSupported();
+    setup.classList.toggle('hidden', !canOffline);
+    setup.textContent = 'Enable offline';
+  }
+
+  /**
+   * One-time 39MB download, reported as it goes. Kept out of the session
+   * loop: it is started from the button, and the session carries on
+   * meanwhile on whatever engine it already has.
+   */
+  function setupOffline() {
+    const btn = $('btn-audio-offline');
+    if (btn.disabled) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Downloading… 0%';
+
+    downloadVoskModel(function (loaded, total) {
+      btn.textContent = total
+        ? 'Downloading… ' + Math.round((loaded / total) * 100) + '%'
+        : 'Downloading… ' + Math.round(loaded / 1048576) + 'MB';
+    }).then(function () {
+      // Pull the library down too. The model alone is not enough to run in a
+      // tunnel — the 5.8MB WASM bundle is fetched lazily and would otherwise
+      // still be missing the first time it is actually needed.
+      return loadVoskLib();
+    }).then(function () {
+      btn.classList.add('hidden');
+      btn.disabled = false;
+      setNotice('Offline recognition is ready. It takes effect the next time you start audio practice.', 'ok');
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Enable offline';
+      const offlineNow = !navigator.onLine;
+      setNotice(offlineNow
+        ? 'That download needs a connection. Try it before you set off.'
+        : 'Could not download the offline model (' + ((err && err.message) || 'failed') + ').', 'error');
+    });
+  }
+
+  function openView() {
+    BackStack.push('audio-practice', exit);
+    $('trainer-content').classList.add('hidden');
+    $('audio-practice-view').classList.remove('hidden');
+    $('audio-session').classList.remove('hidden');
+    $('audio-summary').classList.add('hidden');
+    $('audio-exam-name').textContent = (getActiveExam() || {}).name || '';
+    window.scrollTo({ top: 0 });
+  }
+
+  function exit() {
+    BackStack.release('audio-practice');
+    stopListening();
+    Speaker.cancel();
+    releaseWakeLock();
+    phase = 'idle';
+    // The offline engine holds a microphone, an audio graph and a worker
+    // with the model in it — dropping the reference would leak all three.
+    if (engine && engine.release) engine.release();
+    engine = null;
+    $('audio-practice-view').classList.add('hidden');
+    $('trainer-content').classList.remove('hidden');
+  }
+
+  return {
+    start:        start,
+    exit:         exit,
+    finish:       finish,
+    command:      runCommand,
+    setupOffline: setupOffline,
+  };
+})();
+
+/* ─── Audio practice wiring ─────────────────────────── */
+
+$('btn-audio-practice').addEventListener('click', function () {
+  AudioPractice.start();
+});
+
+$('btn-audio-offline').addEventListener('click', function () { AudioPractice.setupOffline(); });
+$('btn-audio-back').addEventListener('click', function () { AudioPractice.exit(); });
+$('btn-audio-done').addEventListener('click', function () { AudioPractice.exit(); });
+
+// On-screen twins of the voice commands — for a glance at a red light, and
+// as the way out if recognition is not cooperating.
+$('btn-audio-repeat').addEventListener('click', function () { AudioPractice.command('repeat'); });
+$('btn-audio-reveal').addEventListener('click', function () { AudioPractice.command('answer'); });
+$('btn-audio-next').addEventListener('click',   function () { AudioPractice.command('next'); });
+$('btn-audio-stop').addEventListener('click',   function () { AudioPractice.finish(); });
+
+// Exposed for quick checks from the console.
+window.AudioPractice = AudioPractice;
+window.matchSpokenAnswer = matchSpokenAnswer;
+window.matchCommand = matchCommand;
 
 /* ═══════════════════════════════════════════════════════
    INITIALISE

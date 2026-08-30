@@ -9,7 +9,7 @@
        old caches are cleaned up and clients pick up changes.
    ═══════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v20';
+const CACHE_VERSION = 'v22';
 const CACHE_NAME = 'examtrainer-' + CACHE_VERSION;
 
 // Same-origin app shell. Relative paths keep this working under the
@@ -26,6 +26,10 @@ const APP_SHELL = [
   './icon-192.png',
   './icon-512.png',
   './icon-maskable-512.png',
+  // Tiny, and needed the moment an offline session starts — which may
+  // well be underground. vosk.js itself (5.8MB) is deliberately not here:
+  // it is fetched lazily and warmed when the model is downloaded.
+  './vendor/vosk/mic-worklet.js',
 ];
 
 // Hosts whose responses must never be cached (auth + live Drive data).

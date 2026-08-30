@@ -16,6 +16,24 @@ Exam Trainer is a fully static site (HTML/CSS/JS, no backend). It is hosted on
 > relative** (`./app.js`, not `/app.js`). The service worker and manifest already
 > use relative paths — keep it that way.
 
+## What does and does not get published
+
+GitHub Pages runs Jekyll over the repository root, so by default everything in the
+repo is published. [`_config.yml`](_config.yml) exists solely to keep development-only
+files out of the deployed site:
+
+- **`tests/`** — the Node test suite. Run it locally with `node tests/run.js`; it is
+  never loaded by the app and never reaches the build.
+- **`vendor/`** — *is* published, and must be: `vendor/vosk/` ships with the app.
+  Note that setting `exclude` in `_config.yml` replaces Jekyll's defaults rather than
+  adding to them, so do not re-add a bare `vendor/` entry there.
+
+Before pushing, it is worth running the suite — it is fast and needs nothing installed:
+
+```bash
+node tests/run.js
+```
+
 ## Deploying an update
 
 Just push to `main`:

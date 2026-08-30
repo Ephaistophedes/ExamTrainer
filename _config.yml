@@ -1,0 +1,14 @@
+# GitHub Pages build settings.
+#
+# The app is plain static files and needs nothing from Jekyll. This file
+# exists for one reason: to keep development-only files out of the published
+# site. Pages runs Jekyll over the repository root, and anything listed under
+# `exclude` is not copied into the deployed build.
+#
+# Note that setting `exclude` replaces Jekyll's default list rather than
+# adding to it. That is harmless here (this repo has no Gemfile, bundle or
+# node_modules), but it does mean `vendor/` is NOT excluded — which is what
+# we want, since vendor/vosk/ ships with the app.
+
+exclude:
+  - tests/   # Node test suite; run locally with `node tests/run.js`
