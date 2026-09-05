@@ -364,7 +364,8 @@
 
         <!-- Difficulty level selector -->
         <div class="verse-level-bar">
-          <div class="verse-level-pills" role="group" aria-label="Difficulty level">
+          <div class="verse-level-pills" role="group" aria-label="Difficulty level"
+               title="Shift + &larr; / &rarr; to change difficulty">
             <button class="verse-level-pill active" data-level="1">1 &middot; Follow along</button>
             <button class="verse-level-pill" data-level="2">2 &middot; Blanks</button>
             <button class="verse-level-pill" data-level="3">3 &middot; From memory</button>
@@ -399,9 +400,12 @@
 
         <div class="verse-type-actions">
           <button id="btn-verse-redo" class="btn btn-secondary">&#x21BB; Redo</button>
-          <button id="btn-verse-next-level" class="btn btn-primary">Next difficulty &rarr;</button>
-          <button id="btn-verse-prev-item" class="btn btn-secondary hidden">&larr; Previous verse</button>
-          <button id="btn-verse-next-item" class="btn btn-secondary hidden">Next verse &rarr;</button>
+          <button id="btn-verse-next-level" class="btn btn-primary"
+                  title="Shift + &rarr;">Next difficulty &rarr;</button>
+          <button id="btn-verse-prev-item" class="btn btn-secondary hidden"
+                  title="&larr; arrow key">&larr; Previous verse</button>
+          <button id="btn-verse-next-item" class="btn btn-secondary hidden"
+                  title="&rarr; arrow key">Next verse &rarr;</button>
         </div>
       </div>
 

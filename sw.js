@@ -9,7 +9,7 @@
        old caches are cleaned up and clients pick up changes.
    ═══════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v22';
+const CACHE_VERSION = 'v23';
 const CACHE_NAME = 'examtrainer-' + CACHE_VERSION;
 
 // Same-origin app shell. Relative paths keep this working under the

@@ -4409,17 +4409,26 @@ function loadVerseSession() {
   setupVerseLevel();
 }
 
+/**
+ * Whether paging by `delta` is possible right now. Paging only applies to a
+ * single verse loaded out of a multi-verse entry — a combined session has
+ * nothing to page between. Shared by the Previous/Next buttons and the arrow
+ * keys, so a shortcut can never reach a move the buttons say is unavailable.
+ */
+function canStepVerseItem(delta) {
+  if (!_verseEntry) return false;
+  if (_verseQueue.length !== 1 || _verseItemIndex < 0) return false;
+  const next = _verseItemIndex + delta;
+  return next >= 0 && next < normalizeVerseEntry(_verseEntry).length;
+}
+
 /** Show the "Previous/Next verse" buttons only when paging a single verse within an entry. */
 function updateVerseNav() {
   const nextBtn = $('btn-verse-next-item');
   const prevBtn = $('btn-verse-prev-item');
   if (!nextBtn || !prevBtn) return;
-  const items = _verseEntry ? normalizeVerseEntry(_verseEntry) : [];
-  const paging = _verseQueue.length === 1 && _verseItemIndex >= 0;
-  const hasNext = paging && (_verseItemIndex + 1) < items.length;
-  const hasPrev = paging && (_verseItemIndex - 1) >= 0;
-  nextBtn.classList.toggle('hidden', !hasNext);
-  prevBtn.classList.toggle('hidden', !hasPrev);
+  nextBtn.classList.toggle('hidden', !canStepVerseItem(1));
+  prevBtn.classList.toggle('hidden', !canStepVerseItem(-1));
 }
 
 function exitVersePractice() {
@@ -4634,32 +4643,61 @@ $('btn-verse-redo').addEventListener('click', function () {
   setupVerseLevel(); // re-randomizes blanks at level 2
 });
 
-$('btn-verse-next-level').addEventListener('click', function () {
-  if (!_practiceVerse || _verseLevel >= 3) return;
-  _verseLevel++;
+/** Move difficulty by one step, clamped to the 1–3 range. Restarts the level. */
+function stepVerseLevel(delta) {
+  if (!_practiceVerse) return;
+  const next = Math.min(3, Math.max(1, _verseLevel + delta));
+  if (next === _verseLevel) return;
+  _verseLevel = next;
   setupVerseLevel();
-});
+}
 
-// Page forward to the next verse in the entry, keeping the current difficulty.
-$('btn-verse-next-item').addEventListener('click', function () {
-  if (!_verseEntry) return;
+/** Page to another verse in the entry, keeping the current difficulty. */
+function stepVerseItem(delta) {
+  if (!canStepVerseItem(delta)) return;
   const items = normalizeVerseEntry(_verseEntry);
-  const next  = _verseItemIndex + 1;
-  if (next < 0 || next >= items.length) return;
-  _verseItemIndex = next;
-  _verseQueue     = [items[next]];
+  _verseItemIndex += delta;
+  _verseQueue      = [items[_verseItemIndex]];
   loadVerseSession(); // preserves _verseLevel via setupVerseLevel()
-});
+}
 
-// Page back to the previous verse in the entry, keeping the current difficulty.
-$('btn-verse-prev-item').addEventListener('click', function () {
-  if (!_verseEntry) return;
-  const items = normalizeVerseEntry(_verseEntry);
-  const prev  = _verseItemIndex - 1;
-  if (prev < 0 || prev >= items.length) return;
-  _verseItemIndex = prev;
-  _verseQueue     = [items[prev]];
-  loadVerseSession(); // preserves _verseLevel via setupVerseLevel()
+$('btn-verse-next-level').addEventListener('click', function () { stepVerseLevel(1); });
+$('btn-verse-next-item').addEventListener('click', function () { stepVerseItem(1); });
+$('btn-verse-prev-item').addEventListener('click', function () { stepVerseItem(-1); });
+
+/* ─── Keyboard shortcuts (desktop) ─────────────────── */
+
+/** True only while the practice screen is the one actually on show. */
+function versePracticeActive() {
+  return !!_practiceVerse
+    && $('tab-verses').classList.contains('active')
+    && !$('verse-practice-view').classList.contains('hidden')
+    && !document.querySelector('.modal:not(.hidden)');
+}
+
+/**
+ * Arrow keys page between verses, Shift+arrow changes difficulty.
+ *
+ * The arrows are free to take: practice reads letters off the `input` event,
+ * which arrow keys never fire, and the hidden typing field is always empty,
+ * so there is no caret for them to move. Listening on the document rather
+ * than that field keeps the keys working after a click lands focus on one of
+ * the buttons.
+ */
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (!versePracticeActive()) return;
+
+  // Any other field with focus owns its own arrow keys.
+  const t = e.target;
+  if (t && t !== $('verse-type-input') &&
+      (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+  const forward = e.key === 'ArrowRight';
+  if (e.shiftKey) stepVerseLevel(forward ? 1 : -1);
+  else            stepVerseItem(forward ? 1 : -1);
+  e.preventDefault();
 });
 
 

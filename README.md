@@ -10,7 +10,9 @@ browser (`localStorage`), with optional Google Drive sync as a backup / cross-de
 - **Audio practice** — a hands-free voice session for the commute: the app reads each
   question aloud, listens for your spoken answer, and says whether it was right
   ([details](#audio-practice)).
-- **Verses** — memorise verses with a graded first-letter typing trainer.
+- **Verses** — memorise verses with a graded first-letter typing trainer. On a desktop
+  keyboard, <kbd>←</kbd>/<kbd>→</kbd> page between the verses of an entry and
+  <kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd> lower/raise the difficulty.
 - **Installable PWA** — add to your home screen on Android/desktop and use it fully
   offline (with one caveat for audio practice, below).
 
