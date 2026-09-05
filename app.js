@@ -4032,7 +4032,7 @@ $('btn-save-verse').addEventListener('click', function () {
 /* ─── Verse Practice — First-Letter Method ─────────────── */
 
 let _practiceVerse = null;
-let _verseLevel    = 1;     // 1 = follow along, 2 = blanks, 3 = from memory
+let _verseLevel    = 1;     // 1 = follow along, 2 = blanks, 3 = from memory, 4 = master
 let _verseModel    = null;  // { lines, count, letters } built from the verse text
 let _verseStatus   = [];    // per typeable word: 'pending' | 'correct' | 'wrong'
 let _verseBlank    = [];    // per typeable word: true if hidden (level 2)
@@ -4042,6 +4042,7 @@ const VERSE_LEVEL_HINTS = {
   1: 'The whole verse is shown, greyed out. Type the first letter of each word to follow along.',
   2: 'Some words are hidden. Type the first letter of each word — blanks reveal as you go.',
   3: 'Nothing is shown. Type the first letter of every word from memory.',
+  4: 'Nothing is shown — not even the blanks. Type the first letter of every word from memory.',
 };
 
 const VERSE_BLANK_RATIO = 0.4; // fraction of words hidden at level 2
@@ -4482,7 +4483,7 @@ function setupVerseLevel() {
 
   // Next-difficulty button state
   const nextBtn = $('btn-verse-next-level');
-  if (_verseLevel >= 3) {
+  if (_verseLevel >= 4) {
     nextBtn.disabled = true;
     nextBtn.textContent = 'Max difficulty';
   } else {
@@ -4503,6 +4504,7 @@ function setupVerseLevel() {
 /** A pending word is hidden depending on the current level. */
 function isVerseWordHidden(wi, status) {
   if (status !== 'pending') return false; // revealed once attempted
+  if (_verseLevel === 4) return true;     // everything hidden, blanks and all
   if (_verseLevel === 3) return true;     // everything hidden
   if (_verseLevel === 2) return _verseBlank[wi];
   return false;                           // level 1: always visible
@@ -4532,15 +4534,22 @@ function renderVerseType() {
       const status  = _verseStatus[tok.wi];
       const current = (tok.wi === _verseCursor);
       const hidden  = isVerseWordHidden(tok.wi, status);
+      const master  = hidden && _verseLevel === 4; // master: blanks match the background
 
       let cls = 'vt-word';
       if (status === 'correct')    cls += ' vt-correct';
       else if (status === 'wrong') cls += ' vt-wrong';
       else                         cls += ' vt-pending';
       if (hidden)  cls += ' vt-hidden';
+      if (master)  cls += ' vt-invisible';
       if (current) cls += ' vt-current';
 
-      const content = hidden ? maskVerseWord(tok.raw) : esc(tok.raw);
+      // The current word still needs a "you're here" marker, but its box
+      // must never scale with the hidden word's own length — that would
+      // leak the very thing master mode is hiding. A fixed-size dot stands
+      // in for it instead of the (length-revealing) underscore mask.
+      const content = (master && current) ? '<span class="vt-master-cursor"></span>'
+        : hidden ? maskVerseWord(tok.raw) : esc(tok.raw);
       return '<span class="' + cls + '">' + content + '</span>';
     }).join(' ');
 
@@ -4643,10 +4652,10 @@ $('btn-verse-redo').addEventListener('click', function () {
   setupVerseLevel(); // re-randomizes blanks at level 2
 });
 
-/** Move difficulty by one step, clamped to the 1–3 range. Restarts the level. */
+/** Move difficulty by one step, clamped to the 1–4 range. Restarts the level. */
 function stepVerseLevel(delta) {
   if (!_practiceVerse) return;
-  const next = Math.min(3, Math.max(1, _verseLevel + delta));
+  const next = Math.min(4, Math.max(1, _verseLevel + delta));
   if (next === _verseLevel) return;
   _verseLevel = next;
   setupVerseLevel();
@@ -4697,6 +4706,20 @@ document.addEventListener('keydown', function (e) {
   const forward = e.key === 'ArrowRight';
   if (e.shiftKey) stepVerseLevel(forward ? 1 : -1);
   else            stepVerseItem(forward ? 1 : -1);
+  e.preventDefault();
+});
+
+/**
+ * Shift+R redoes the current level. Must preventDefault — otherwise the
+ * (invisible, always-focused) typing field would also receive the "R" as if
+ * it were an answer to the current word.
+ */
+document.addEventListener('keydown', function (e) {
+  if (e.key.toLowerCase() !== 'r' || !e.shiftKey) return;
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (!versePracticeActive()) return;
+
+  setupVerseLevel();
   e.preventDefault();
 });
 

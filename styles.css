@@ -2700,6 +2700,22 @@ main {
 .vt-hidden.vt-current {
   background: var(--primary-light);
 }
+/* Master level: the blank itself disappears into the background — not even
+   its length or shape is a clue. */
+.vt-invisible {
+  color: transparent;
+}
+/* The current word still needs a "you're here" marker (.vt-master-cursor,
+   swapped in for the masked text in app.js) — a fixed-size dot, so its box
+   never grows or shrinks with the hidden word's own length. */
+.vt-master-cursor {
+  display: inline-block;
+  width: 0.4em;
+  height: 0.4em;
+  border-radius: 50%;
+  background: var(--primary);
+  vertical-align: middle;
+}
 
 /* Invisible keystroke-capture input, overlaid exactly on the text so the
    keyboard appears where the user is looking and the words highlight in place. */
