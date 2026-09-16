@@ -4059,18 +4059,20 @@ const VERSE_BLANK_RATIO = 0.4; // fraction of words hidden at level 2
  */
 function buildVerseModel(text) {
   const letters = [];
+  const words   = []; // full normalized word per wi, for audio-mode grading
   let wi = 0;
 
   const modelLines = text.split('\n').map(function (line) {
     const leadingMatch = line.match(/^(\s+)/);
     const indent = leadingMatch ? leadingMatch[1].length : 0;
-    const words = line.trim().split(/\s+/).filter(Boolean);
+    const lineWords = line.trim().split(/\s+/).filter(Boolean);
 
-    const tokens = words.map(function (raw) {
+    const tokens = lineWords.map(function (raw) {
       const m = raw.match(/[a-z0-9]/i);
       if (m) {
         const letter = m[0].toLowerCase();
         letters.push(letter);
+        words.push(normalizeVerseWord(raw));
         return { raw: raw, letter: letter, wi: wi++ };
       }
       return { raw: raw, letter: null, wi: -1 };
@@ -4079,7 +4081,7 @@ function buildVerseModel(text) {
     return { indent: indent, tokens: tokens };
   });
 
-  return { lines: modelLines, count: wi, letters: letters };
+  return { lines: modelLines, count: wi, letters: letters, words: words };
 }
 
 /* ─── Start / Stop ─────────────────────────────────── */
@@ -4419,6 +4421,9 @@ function loadVerseSession() {
 function canStepVerseItem(delta) {
   if (!_verseEntry) return false;
   if (_verseQueue.length !== 1 || _verseItemIndex < 0) return false;
+  // Paging swaps out _verseModel entirely — audio practice is mid-session
+  // against the old one, so paging is blocked until it's stopped.
+  if (VerseAudioPractice.isActive()) return false;
   const next = _verseItemIndex + delta;
   return next >= 0 && next < normalizeVerseEntry(_verseEntry).length;
 }
@@ -4433,6 +4438,12 @@ function updateVerseNav() {
 }
 
 function exitVersePractice() {
+  // The "← Back" button can be clicked while audio practice is running —
+  // it never goes through VerseAudioPractice's own close button — so the
+  // session (mic, wake lock, speech synthesis) has to be torn down here
+  // too, not just when its own BackStack entry is popped.
+  VerseAudioPractice.exit();
+
   BackStack.release('verse-practice');
   $('verse-practice-view').classList.add('hidden');
   _practiceVerse = null;
@@ -4641,7 +4652,11 @@ $('verse-type-display').addEventListener('click', function () {
 
 document.querySelectorAll('.verse-level-pill').forEach(function (pill) {
   pill.addEventListener('click', function () {
-    if (!_practiceVerse) return;
+    // Changing level rebuilds _verseStatus/_verseCursor for the typing view's
+    // own cursor — mid-recitation that would both re-pop the (invisible,
+    // hands-free) keyboard and paint a stray "current word" box. Pick a
+    // level before starting to recite, not mid-session.
+    if (!_practiceVerse || VerseAudioPractice.isActive()) return;
     _verseLevel = Number(pill.dataset.level);
     setupVerseLevel();
   });
@@ -4654,7 +4669,7 @@ $('btn-verse-redo').addEventListener('click', function () {
 
 /** Move difficulty by one step, clamped to the 1–4 range. Restarts the level. */
 function stepVerseLevel(delta) {
-  if (!_practiceVerse) return;
+  if (!_practiceVerse || VerseAudioPractice.isActive()) return;
   const next = Math.min(4, Math.max(1, _verseLevel + delta));
   if (next === _verseLevel) return;
   _verseLevel = next;
@@ -4719,7 +4734,11 @@ document.addEventListener('keydown', function (e) {
   if (e.altKey || e.ctrlKey || e.metaKey) return;
   if (!versePracticeActive()) return;
 
-  setupVerseLevel();
+  if (VerseAudioPractice.isActive()) {
+    VerseAudioPractice.command('restart');
+  } else {
+    setupVerseLevel();
+  }
   e.preventDefault();
 });
 
@@ -5129,6 +5148,29 @@ const VOICE_COMMANDS = [
   ] },
 ];
 
+// The verse recitation loop has no "answer" to ask for and "done" means
+// something different from "stop" — reciting has finished, not the session
+// itself — so it gets its own small command set rather than overloading
+// VOICE_COMMANDS's "finish" / "i m done", which mean "end the session" there.
+const VERSE_VOICE_COMMANDS = [
+  { id: 'done', phrases: [
+    'done', 'i m done', 'im done', 'that s it', 'thats it',
+    'that s the verse', 'thats the verse', 'finished', 'i m finished',
+    'im finished', 'check it', 'grade it', 'mark it', 'end of verse',
+  ] },
+  { id: 'repeat', phrases: [
+    'repeat', 'say again', 'say that again', 'again', 'come again',
+    'read it again', 'once more', 'repeat the reference', 'what verse is this',
+  ] },
+  { id: 'restart', phrases: [
+    'restart', 'start over', 'redo', 'try again', 'from the top', 'reset',
+  ] },
+  { id: 'stop', phrases: [
+    'stop', 'stop practice', 'stop practising', 'end session',
+    'exit', 'quit', 'cancel', 'never mind',
+  ] },
+];
+
 function normalizeCommand(text) {
   let s = spokenNumbersToDigits(normalizeAnswer(text));
   let prev;
@@ -5137,20 +5179,20 @@ function normalizeCommand(text) {
 }
 
 /**
- * Recognise a command in a spoken utterance, tolerating the near misses a
- * recogniser produces ("what's the answer" / "what is the answer" /
- * "whats the answer"). Matched against the *whole* utterance rather than
- * searched inside it, so an answer that happens to contain "next" is still
- * graded as an answer.
+ * Recognise a command in a spoken utterance against a given phrase list,
+ * tolerating the near misses a recogniser produces ("what's the answer" /
+ * "what is the answer" / "whats the answer"). Matched against the *whole*
+ * utterance rather than searched inside it, so an answer that happens to
+ * contain "next" is still graded as an answer.
  */
-function matchCommand(text) {
+function matchCommandFrom(text, commands) {
   const s = normalizeCommand(text);
   if (!s) return null;
 
   let best     = null;
   let bestSim  = 0;
 
-  VOICE_COMMANDS.forEach(function (cmd) {
+  commands.forEach(function (cmd) {
     cmd.phrases.forEach(function (phrase) {
       const maxLen = Math.max(s.length, phrase.length);
       const sim    = maxLen === 0 ? 0 : 1 - (levenshtein(s, phrase) / maxLen);
@@ -5161,6 +5203,73 @@ function matchCommand(text) {
   // 0.82 accepts a syllable or two of slop on a short phrase without
   // letting a genuine one-line answer trip a command.
   return bestSim >= 0.82 ? best : null;
+}
+
+function matchCommand(text) {
+  return matchCommandFrom(text, VOICE_COMMANDS);
+}
+
+/* ─── Grading a recited verse ───────────────────────── */
+
+/**
+ * Canonicalise one word of a verse for audio-mode alignment: lower-cased,
+ * punctuation dropped rather than space-substituted — unlike normalizeAnswer,
+ * a token here must stay exactly one recited word, so "God's" has to come out
+ * as "gods", not split into "god" and "s" — and spelled-out numbers digitised
+ * the same way a recogniser's transcript is, so "sixteen" lines up with "16".
+ */
+function normalizeVerseWord(raw) {
+  return spokenNumbersToDigits(String(raw).toLowerCase().replace(/[^a-z0-9]/g, ''));
+}
+
+/**
+ * Split a chunk of recognised speech into words for verse-recitation
+ * grading. Deliberately not normalizeSpeech: that strips filler words and
+ * "I think it's..." lead-ins for short Q&A answers, but "so", "well" and
+ * "like" are real words in a lot of scripture, and a recited verse has no
+ * dictation preamble to strip.
+ */
+function verseWordsFrom(text) {
+  return String(text).trim().split(/\s+/).filter(Boolean).map(normalizeVerseWord).filter(Boolean);
+}
+
+/**
+ * Align recited words to a verse's expected words, in order, tolerating the
+ * same stems/typos as answer grading (wordsMatch). This is a longest-common-
+ * subsequence match rather than a bag-of-words one, so a word said out of
+ * order is not credited for a slot it wasn't actually said at — reciting
+ * "so loved God the world" should not look like a clean pass on John 3:16.
+ * Returns the expected-word indices that were recited, ascending.
+ */
+function alignVerseWords(expectedWords, heardWords) {
+  const n = expectedWords.length;
+  const m = heardWords.length;
+  if (!n || !m) return [];
+
+  const dp = new Array(n + 1);
+  for (let i = 0; i <= n; i++) dp[i] = new Array(m + 1).fill(0);
+
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] = wordsMatch(expectedWords[i - 1], heardWords[j - 1])
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+
+  const matched = [];
+  let i = n, j = m;
+  while (i > 0 && j > 0) {
+    if (wordsMatch(expectedWords[i - 1], heardWords[j - 1])) {
+      matched.push(i - 1);
+      i--; j--;
+    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+  return matched.reverse();
 }
 
 /* ─── Speech out (TTS) ──────────────────────────────── */
@@ -5830,6 +5939,24 @@ VoskEngine.prototype.release = function () {
 
 /* ─── Session ───────────────────────────────────────── */
 
+/**
+ * Ask for the microphone up front rather than letting recognition raise the
+ * prompt mid-sentence, so a denial can be explained clearly instead of
+ * surfacing as a bare error code. Shared by the exam's Audio Practice and
+ * verse recitation practice — both need the same up-front check.
+ */
+function ensureMicPermission() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return Promise.resolve(true); // recogniser will raise its own prompt
+  }
+  return navigator.mediaDevices.getUserMedia({ audio: true })
+    .then(function (stream) {
+      stream.getTracks().forEach(function (t) { t.stop() });
+      return true;
+    })
+    .catch(function () { return false; });
+}
+
 const AudioPractice = (function () {
   let engine    = null;
   let queue     = [];     // one entry per answer part, in asking order
@@ -6110,23 +6237,6 @@ const AudioPractice = (function () {
     return items;
   }
 
-  /**
-   * Ask for the microphone up front rather than letting recognition raise
-   * the prompt mid-sentence, so a denial can be explained clearly instead
-   * of surfacing as a bare error code.
-   */
-  function ensureMicPermission() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      return Promise.resolve(true); // recogniser will raise its own prompt
-    }
-    return navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(function (stream) {
-        stream.getTracks().forEach(function (t) { t.stop() });
-        return true;
-      })
-      .catch(function () { return false; });
-  }
-
   function start() {
     const exam = getActiveExam();
     if (!exam) return;
@@ -6303,6 +6413,415 @@ $('btn-audio-stop').addEventListener('click',   function () { AudioPractice.fini
 window.AudioPractice = AudioPractice;
 window.matchSpokenAnswer = matchSpokenAnswer;
 window.matchCommand = matchCommand;
+
+/* ═══════════════════════════════════════════════════════
+   VERSE AUDIO PRACTICE
+   Hands-free recitation for the commute: the app names the
+   passage, then listens while the whole thing is recited from
+   memory. Rather than a separate screen, this drives the same
+   passage display the typing practice above uses — words light
+   up green as they're recognised, right where "Follow along" /
+   "Blanks" / "From memory" already mask and reveal them — so the
+   two practice modes share one model of "how far through this
+   verse am I."
+   ═══════════════════════════════════════════════════════ */
+
+const VerseAudioPractice = (function () {
+  let engine       = null;
+  let active       = false;
+  let phase        = 'idle'; // idle | speaking | listening | judging | done
+  let wakeLock     = null;
+  let nudged       = false;
+  let silenceTimer = null;
+  let heardChunks  = []; // recognised final segments, in order, this attempt
+  let expected     = []; // normalized expected words, one per _verseModel wi
+
+  /* — view helpers — */
+
+  function setPhase(next) {
+    phase = next;
+    const orb   = $('verse-audio-orb');
+    const label = $('verse-audio-state-label');
+    if (!orb) return;
+
+    orb.className = 'audio-orb audio-orb-' + next;
+    label.textContent =
+      next === 'speaking'  ? 'Speaking…'  :
+      next === 'listening' ? 'Listening…' :
+      next === 'judging'   ? 'Checking…'  :
+      next === 'done'      ? 'Finished'   : '';
+  }
+
+  function setNotice(msg, kind) {
+    const el = $('verse-audio-notice');
+    el.textContent = msg || '';
+    el.className = 'audio-notice' + (msg ? '' : ' hidden') + (kind ? ' audio-notice-' + kind : '');
+  }
+
+  function setHeard(text) {
+    const el = $('verse-audio-heard');
+    el.textContent = text || '';
+    el.classList.toggle('hidden', !text);
+  }
+
+  function setVerdict(kind, text) {
+    const el = $('verse-audio-verdict');
+    el.textContent = text || '';
+    el.className = 'audio-verdict' + (text ? '' : ' hidden') + (kind ? ' audio-verdict-' + kind : '');
+  }
+
+  function promptTitle() {
+    return _verseEntry ? verseTitle(_verseEntry)
+      : (_verseQueue[0] && _verseQueue[0].ref) || 'this passage';
+  }
+
+  /**
+   * setupVerseLevel() is shared with the typing view, so it leaves the first
+   * word marked "current" and focuses the (here, invisible) typing field —
+   * on a phone that pops the keyboard, which is exactly what a hands-free
+   * mode must not do.
+   */
+  function resetDisplay() {
+    setupVerseLevel();
+    _verseCursor = -1;
+    renderVerseType();
+    $('verse-type-input').blur();
+  }
+
+  /* — the loop — */
+
+  /** Speak, with the microphone closed so the app never hears itself. */
+  function say(text) {
+    stopListening();
+    setPhase('speaking');
+    return Speaker.speak(text);
+  }
+
+  function beginListening() {
+    if (!active || phase === 'done') return;
+    setPhase('listening');
+    nudged = false;
+    engine.start({ onResult: onResult, onError: onEngineError });
+    armSilenceTimer();
+  }
+
+  function stopListening() {
+    clearTimeout(silenceTimer);
+    if (engine) engine.stop();
+  }
+
+  /** Same "don't rush them" philosophy as the exam's Audio Practice. */
+  function armSilenceTimer() {
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(function () {
+      if (phase !== 'listening' || nudged) return;
+      nudged = true;
+      say('Still listening. Say done when you finish, or stop to end.')
+        .then(function () { if (active && phase === 'speaking') beginListening(); });
+    }, 20000);
+  }
+
+  function onResult(alternatives, isFinal) {
+    if (phase !== 'listening') return; // ignore anything caught mid-sentence
+    const best = alternatives[0] || '';
+    setHeard((heardChunks.join(' ') + ' ' + best).trim());
+    if (!isFinal) return;
+
+    clearTimeout(silenceTimer);
+
+    // A command is often the recogniser's second guess, so every
+    // alternative gets a look before the utterance is added to the passage.
+    for (let i = 0; i < alternatives.length; i++) {
+      const cmd = matchCommandFrom(alternatives[i], VERSE_VOICE_COMMANDS);
+      if (cmd) return runCommand(cmd);
+    }
+
+    heardChunks.push(best);
+    applyAlignment();
+  }
+
+  /**
+   * Recompute which expected words have been recited, from everything
+   * heard so far, and light them up on the shared passage display. Cheap
+   * enough to redo from scratch on every final chunk (a handful of times
+   * per session, not per keystroke) and simpler than trying to patch a
+   * running alignment incrementally.
+   */
+  function applyAlignment() {
+    const heard = verseWordsFrom(heardChunks.join(' '));
+    alignVerseWords(expected, heard).forEach(function (wi) {
+      if (_verseStatus[wi] === 'pending') _verseStatus[wi] = 'correct';
+    });
+    _verseCursor = -1; // no single "current" word in audio mode
+    renderVerseType();
+    renderProgress();
+  }
+
+  function renderProgress() {
+    const total = _verseModel ? _verseModel.count : 0;
+    const fill  = $('verse-type-progress-fill');
+    const text  = $('verse-type-progress-text');
+    const bar   = $('verse-type-progress');
+    if (!fill || !total) return;
+
+    const got = _verseStatus.filter(function (s) { return s === 'correct'; }).length;
+    const pct = Math.round(got / total * 100);
+    fill.style.width = pct + '%';
+    text.textContent = phase === 'done'
+      ? 'Done!  ' + got + ' / ' + total + ' recited (' + pct + '%)'
+      : got + ' / ' + total + ' words recited';
+    bar.classList.toggle('vt-done', phase === 'done');
+  }
+
+  function runCommand(id) {
+    if (id === 'repeat') {
+      say('Recite ' + promptTitle() + ' from memory.')
+        .then(function () { if (active && phase === 'speaking') beginListening(); });
+      return;
+    }
+    if (id === 'restart') { restart(); return; }
+    if (id === 'done')    { finish();  return; }
+    if (id === 'stop')    { exit();    return; }
+  }
+
+  /** Reset to a fresh attempt at the current level, still inside the session. */
+  function restart() {
+    heardChunks = [];
+    resetDisplay();
+    renderProgress();
+    setVerdict(null, '');
+    setHeard('');
+    say('Recite ' + promptTitle() + ' from memory.')
+      .then(function () { if (active) beginListening(); });
+  }
+
+  /** The user has finished reciting: reveal what was missed and grade it. */
+  function finish() {
+    stopListening();
+    setPhase('judging');
+
+    _verseStatus.forEach(function (s, wi) {
+      if (s === 'pending') _verseStatus[wi] = 'wrong';
+    });
+    _verseCursor = _verseModel.count;
+    renderVerseType();
+
+    const total = _verseModel.count;
+    const got   = _verseStatus.filter(function (s) { return s === 'correct'; }).length;
+    const pct   = total ? Math.round(got / total * 100) : 0;
+    const kind  = pct >= 90 ? 'correct' : pct >= 60 ? 'close' : 'wrong';
+
+    setPhase('done');
+    renderProgress();
+    setVerdict(kind, got + ' / ' + total + ' words (' + pct + '%)');
+    releaseWakeLock();
+
+    // Speaker.speak() directly, not say() — say() flips the phase back to
+    // "speaking" for the interactive loop, which would overwrite the "done"
+    // orb we just set for a summary that has nothing left to listen for.
+    Speaker.speak('Finished. ' + got + ' out of ' + total + ' words, ' + pct + ' percent.');
+  }
+
+  /* — screen wake lock — */
+
+  function requestWakeLock() {
+    if (!navigator.wakeLock) return;
+    navigator.wakeLock.request('screen')
+      .then(function (lock) { wakeLock = lock; })
+      .catch(function () { /* denied or unsupported; not fatal */ });
+  }
+
+  function releaseWakeLock() {
+    if (!wakeLock) return;
+    try { wakeLock.release(); } catch (e) { /* already released */ }
+    wakeLock = null;
+  }
+
+  /* — errors — */
+
+  function onEngineError(code) {
+    if (code === 'not-allowed' || code === 'service-not-allowed') {
+      setNotice('Microphone access was denied. Allow it in your browser’s site settings, then start audio practice again.', 'error');
+      setPhase('idle');
+      stopListening();
+      return;
+    }
+    if (code === 'network') {
+      setNotice('Speech recognition needs a connection on this device — the browser’s recogniser is not on-device here.', 'error');
+      return;
+    }
+    if (code === 'unsupported') {
+      setNotice('This browser has no speech recognition. Try Chrome.', 'error');
+      setPhase('idle');
+      return;
+    }
+    setNotice('Speech recognition error: ' + code, 'error');
+  }
+
+  /**
+   * Get the chosen engine ready, and fall back to the browser recogniser if
+   * the offline one cannot start — same reasoning as the exam's Audio
+   * Practice: a cleared cache or a half-finished download should cost you
+   * the offline guarantee, not the session.
+   */
+  function prepareEngine() {
+    return engine.prepare().catch(function (err) {
+      if (engine instanceof WebSpeechEngine) throw err;
+
+      const reason = (err && err.message) || 'unknown';
+      const modelUnusable = reason === 'model-not-downloaded' ||
+                            reason === 'model-corrupt' ||
+                            reason === 'model-load-failed' ||
+                            reason === 'model-load-timeout';
+      if (modelUnusable) localStorage.removeItem(KEYS.voskModel);
+
+      const fallback = new WebSpeechEngine();
+      if (!fallback.isSupported()) throw err;
+
+      if (engine.release) engine.release();
+      engine = fallback;
+      setNotice('Offline recognition is not set up on this device — using the browser recogniser, which needs a connection.', null);
+      return engine.prepare();
+    });
+  }
+
+  function showEngineNote(offline) {
+    $('verse-audio-engine-note').textContent = offline
+      ? 'On-device recognition · works offline'
+      : 'Browser recognition · needs a connection on this device';
+
+    const setup = $('btn-verse-audio-offline');
+    const canOffline = !offline && new VoskEngine().isSupported();
+    setup.classList.toggle('hidden', !canOffline);
+    setup.textContent = 'Enable offline';
+  }
+
+  /** One-time 39MB download, shared with the exam's Audio Practice model. */
+  function setupOffline() {
+    const btn = $('btn-verse-audio-offline');
+    if (btn.disabled) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Downloading… 0%';
+
+    downloadVoskModel(function (loaded, total) {
+      btn.textContent = total
+        ? 'Downloading… ' + Math.round((loaded / total) * 100) + '%'
+        : 'Downloading… ' + Math.round(loaded / 1048576) + 'MB';
+    }).then(function () {
+      return loadVoskLib();
+    }).then(function () {
+      btn.classList.add('hidden');
+      btn.disabled = false;
+      setNotice('Offline recognition is ready. It takes effect the next time you start audio practice.', 'ok');
+    }).catch(function (err) {
+      btn.disabled = false;
+      btn.textContent = 'Enable offline';
+      const offlineNow = !navigator.onLine;
+      setNotice(offlineNow
+        ? 'That download needs a connection. Try it before you set off.'
+        : 'Could not download the offline model (' + ((err && err.message) || 'failed') + ').', 'error');
+    });
+  }
+
+  /* — entry / exit — */
+
+  function enter() {
+    if (active || !_verseModel) return;
+
+    if (!Speaker.supported()) {
+      showConfirm('This browser cannot speak text aloud, so audio practice will not work here.', 'OK', function () {});
+      return;
+    }
+    engine = createSttEngine();
+    if (!engine.isSupported()) {
+      showConfirm('This browser has no speech recognition. Audio practice needs Chrome (desktop or Android).', 'OK', function () {});
+      return;
+    }
+
+    expected = _verseModel.words;
+    if (!expected.length) return;
+
+    active      = true;
+    heardChunks = [];
+    resetDisplay();
+
+    BackStack.push('verse-audio', exit);
+    $('verse-type-actions').classList.add('hidden');
+    $('verse-audio-panel').classList.remove('hidden');
+    $('btn-verse-audio-toggle').textContent = '✕ Exit audio practice';
+    setNotice('', null);
+    setHeard('');
+    setVerdict(null, '');
+    renderProgress();
+    setPhase('speaking');
+
+    ensureMicPermission().then(function (granted) {
+      if (!granted) { onEngineError('not-allowed'); return; }
+      requestWakeLock();
+      return prepareEngine().then(function () {
+        showEngineNote(!!(engine.offline));
+        return say('Audio practice. Recite ' + promptTitle() + ' from memory. ' +
+            'Say done when you finish, repeat to hear this again, or stop to end.')
+          .then(beginListening);
+      });
+    });
+  }
+
+  function exit() {
+    if (!active) return;
+    BackStack.release('verse-audio');
+    stopListening();
+    Speaker.cancel();
+    releaseWakeLock();
+    if (engine && engine.release) engine.release();
+    engine  = null;
+    active  = false;
+    phase   = 'idle';
+
+    $('verse-type-actions').classList.remove('hidden');
+    $('verse-audio-panel').classList.add('hidden');
+    $('btn-verse-audio-toggle').textContent = '🎧 Audio practice';
+
+    setupVerseLevel(); // clean slate back in typing mode
+  }
+
+  function toggle() {
+    if (!_verseModel) return;
+    if (active) exit(); else enter();
+  }
+
+  return {
+    toggle:       toggle,
+    exit:         exit,
+    command:      runCommand,
+    setupOffline: setupOffline,
+    isActive:     function () { return active; },
+  };
+})();
+
+/* ─── Verse audio practice wiring ───────────────────── */
+
+$('btn-verse-audio-toggle').addEventListener('click', function () {
+  VerseAudioPractice.toggle();
+});
+$('btn-verse-audio-selected').addEventListener('click', function () {
+  if (!_verseEntry || _verseSelectedIdx.size === 0) return;
+  const items = normalizeVerseEntry(_verseEntry);
+  const idxs = Array.from(_verseSelectedIdx).sort(function (a, b) { return a - b; });
+  const selected = idxs.map(function (i) { return items[i]; });
+  beginVerseSession(selected, true, selected.length === 1 ? idxs[0] : -1);
+  VerseAudioPractice.toggle();
+});
+
+$('btn-verse-audio-offline').addEventListener('click', function () { VerseAudioPractice.setupOffline(); });
+$('btn-verse-audio-repeat').addEventListener('click', function () { VerseAudioPractice.command('repeat'); });
+$('btn-verse-audio-restart').addEventListener('click', function () { VerseAudioPractice.command('restart'); });
+$('btn-verse-audio-done').addEventListener('click', function () { VerseAudioPractice.command('done'); });
+$('btn-verse-audio-stop').addEventListener('click', function () { VerseAudioPractice.exit(); });
+
+window.VerseAudioPractice = VerseAudioPractice;
+window.alignVerseWords = alignVerseWords;
 
 /* ═══════════════════════════════════════════════════════
    INITIALISE

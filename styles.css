@@ -2192,6 +2192,7 @@ main {
 .verse-practice-header {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.75rem;
   margin-bottom: 1rem;
 }
@@ -2785,6 +2786,10 @@ main {
   margin-top: 1rem;
 }
 
+.verse-audio-panel {
+  margin-top: 1rem;
+}
+
 /* Practice header heading + subtitle */
 .verse-practice-heading {
   display: flex;
@@ -2815,6 +2820,7 @@ main {
 .verse-select-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-left: auto;
 }

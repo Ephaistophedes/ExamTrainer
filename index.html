@@ -346,6 +346,8 @@
           <div class="verse-select-actions">
             <button id="btn-verse-select-all" class="btn btn-ghost">Select All</button>
             <button id="btn-verse-select-none" class="btn btn-ghost">Clear</button>
+            <button id="btn-verse-audio-selected" class="btn btn-secondary btn-sm btn-audio"
+                    title="Hands-free recitation practice">&#x1F3A7; Audio practice</button>
             <button id="btn-verse-practice-selected" class="btn btn-primary btn-sm">Practice selected</button>
           </div>
         </div>
@@ -360,6 +362,8 @@
             <h2 id="verse-practice-title"></h2>
             <span id="verse-practice-sub" class="verse-practice-sub hidden"></span>
           </div>
+          <button id="btn-verse-audio-toggle" class="btn btn-secondary btn-audio"
+                  title="Hands-free recitation practice">&#x1F3A7; Audio practice</button>
         </div>
 
         <!-- Difficulty level selector -->
@@ -399,7 +403,7 @@
                  aria-label="Type the first letter of each word">
         </div>
 
-        <div class="verse-type-actions">
+        <div id="verse-type-actions" class="verse-type-actions">
           <button id="btn-verse-redo" class="btn btn-secondary" title="Shift + R">&#x21BB; Redo</button>
           <button id="btn-verse-next-level" class="btn btn-primary"
                   title="Shift + &rarr;">Next difficulty &rarr;</button>
@@ -407,6 +411,39 @@
                   title="&larr; arrow key">&larr; Previous verse</button>
           <button id="btn-verse-next-item" class="btn btn-secondary hidden"
                   title="&rarr; arrow key">Next verse &rarr;</button>
+        </div>
+
+        <!-- Audio practice (hands-free recitation) — replaces the typing
+             controls above while active; the passage display is shared. -->
+        <div id="verse-audio-panel" class="audio-view verse-audio-panel hidden">
+          <div class="audio-topbar">
+            <span id="verse-audio-engine-note" class="audio-engine-note"></span>
+            <button id="btn-verse-audio-offline" class="btn btn-secondary audio-offline-btn hidden"
+                    title="Download the on-device model (39MB) so audio practice works with no connection">Enable offline</button>
+          </div>
+
+          <div id="verse-audio-notice" class="audio-notice hidden" role="alert"></div>
+
+          <div class="audio-stage">
+            <div id="verse-audio-orb" class="audio-orb" aria-hidden="true"></div>
+            <span id="verse-audio-state-label" class="audio-state-label" aria-live="polite"></span>
+          </div>
+
+          <p id="verse-audio-heard" class="audio-heard hidden" aria-live="polite"></p>
+          <div id="verse-audio-verdict" class="audio-verdict hidden" role="status"></div>
+
+          <p class="audio-hints">
+            Say &ldquo;<strong>done</strong>&rdquo; when you finish reciting,
+            &ldquo;<strong>repeat</strong>&rdquo; to hear the reference again,
+            or &ldquo;<strong>stop</strong>&rdquo; to end.
+          </p>
+
+          <div class="audio-controls">
+            <button id="btn-verse-audio-repeat" class="btn btn-secondary">&#x21BB; Repeat</button>
+            <button id="btn-verse-audio-restart" class="btn btn-secondary">Restart</button>
+            <button id="btn-verse-audio-done" class="btn btn-primary">Done &#x2713;</button>
+            <button id="btn-verse-audio-stop" class="btn btn-danger-ghost">Stop</button>
+          </div>
         </div>
       </div>
 
