@@ -46,7 +46,6 @@ const EXPORTS = [
   'normalizeSpeech', 'spokenNumbersToDigits', 'canonicalizeRefs', 'extractRefs',
   'matchSpokenAnswer', 'matchCommand', 'speakableAnswer', 'speakableQuestion',
   'chunkForSpeech', 'matchCommandFrom', 'VERSE_VOICE_COMMANDS',
-  'normalizeVerseWord', 'verseWordsFrom', 'alignVerseWords',
 ];
 
 const mod = { exports: {} };
@@ -58,8 +57,7 @@ new Function('module', 'exports', 'window',
 const {
   matchSpokenAnswer, matchCommand, speakableAnswer, speakableQuestion,
   chunkForSpeech, canonicalizeRefs, spokenNumbersToDigits,
-  matchCommandFrom, VERSE_VOICE_COMMANDS, normalizeVerseWord, verseWordsFrom,
-  alignVerseWords,
+  matchCommandFrom, VERSE_VOICE_COMMANDS,
 } = mod.exports;
 
 /* ─── Tiny assertion harness ────────────────────────── */
@@ -128,55 +126,25 @@ command('jesus repeated the prophecy to his disciples',       null); // contains
 command('he did not stop teaching in the temple courts',      null); // contains "stop"
 command('forgiveness of sins heaven and eternal life',        null);
 
-group('Verse audio commands — "done" is not "stop"');
+group('Verse audio commands — repeat / next / previous / stop');
 
 function verseCommand(spoken, want) {
   check('verse command "' + spoken + '"', matchCommandFrom(spoken, VERSE_VOICE_COMMANDS), want);
 }
 
-verseCommand('done',        'done');
-verseCommand('i m done',    'done');
-verseCommand('im done',     'done');
-verseCommand('finished',    'done');
-verseCommand('repeat',      'repeat');
+verseCommand('repeat',         'repeat');
 verseCommand('say that again', 'repeat');
-verseCommand('start over',  'restart');
-verseCommand('from the top', 'restart');
-verseCommand('stop',        'stop');
-verseCommand('quit',        'stop');
+verseCommand('read it again',  'repeat');
+verseCommand('next',           'next');
+verseCommand('next verse',     'next');
+verseCommand('skip',           'next');
+verseCommand('previous',       'previous');
+verseCommand('previous verse', 'previous');
+verseCommand('go back',        'previous');
+verseCommand('stop',           'stop');
+verseCommand('done',           'stop');
+verseCommand('quit',           'stop');
 verseCommand('for god so loved the world that he gave his only begotten son', null);
-
-/* ═══ Verse recitation grading ═══════════════════════ */
-group('Verse recitation — word alignment (order matters, stems/typos forgiven)');
-
-function align(expectedText, heardText) {
-  return alignVerseWords(
-    expectedText.split(' ').map(normalizeVerseWord),
-    verseWordsFrom(heardText)
-  ).length;
-}
-
-check('perfect recitation matches every word',
-      align('for god so loved the world', 'for god so loved the world'), 6);
-check('a dropped word costs exactly that word',
-      align('for god so loved the world', 'for god loved the world'), 5);
-check('a filler-shaped word that is real scripture still counts',
-      align('so shall my word be', 'so shall my word be'), 5);
-check('spoken numbers line up with digits in the reference',
-      align('john 3 16', 'john three sixteen'), 3);
-check('a stemmed plural still counts',
-      align('the kingdom of heaven', 'the kingdoms of heaven'), 4);
-check('reordered words only credit a valid subsequence',
-      align('the quick brown fox', 'brown the fox quick'), 2);
-check('extra spoken words around the verse are not required',
-      align('god is love', 'well god is love i think'), 3);
-
-group('Verse recitation — word normalisation');
-
-check('possessive stays one word, not split like normalizeAnswer would',
-      normalizeVerseWord("God's"), 'gods');
-check('a spelled-out number becomes a digit',
-      normalizeVerseWord('sixteen'), '16');
 
 /* ═══ Scripture references ═══════════════════════════ */
 group('Scripture references — spoken aloud');

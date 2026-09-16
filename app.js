@@ -4059,20 +4059,18 @@ const VERSE_BLANK_RATIO = 0.4; // fraction of words hidden at level 2
  */
 function buildVerseModel(text) {
   const letters = [];
-  const words   = []; // full normalized word per wi, for audio-mode grading
   let wi = 0;
 
   const modelLines = text.split('\n').map(function (line) {
     const leadingMatch = line.match(/^(\s+)/);
     const indent = leadingMatch ? leadingMatch[1].length : 0;
-    const lineWords = line.trim().split(/\s+/).filter(Boolean);
+    const words = line.trim().split(/\s+/).filter(Boolean);
 
-    const tokens = lineWords.map(function (raw) {
+    const tokens = words.map(function (raw) {
       const m = raw.match(/[a-z0-9]/i);
       if (m) {
         const letter = m[0].toLowerCase();
         letters.push(letter);
-        words.push(normalizeVerseWord(raw));
         return { raw: raw, letter: letter, wi: wi++ };
       }
       return { raw: raw, letter: null, wi: -1 };
@@ -4081,7 +4079,7 @@ function buildVerseModel(text) {
     return { indent: indent, tokens: tokens };
   });
 
-  return { lines: modelLines, count: wi, letters: letters, words: words };
+  return { lines: modelLines, count: wi, letters: letters };
 }
 
 /* ─── Start / Stop ─────────────────────────────────── */
@@ -4421,9 +4419,6 @@ function loadVerseSession() {
 function canStepVerseItem(delta) {
   if (!_verseEntry) return false;
   if (_verseQueue.length !== 1 || _verseItemIndex < 0) return false;
-  // Paging swaps out _verseModel entirely — audio practice is mid-session
-  // against the old one, so paging is blocked until it's stopped.
-  if (VerseAudioPractice.isActive()) return false;
   const next = _verseItemIndex + delta;
   return next >= 0 && next < normalizeVerseEntry(_verseEntry).length;
 }
@@ -4652,11 +4647,7 @@ $('verse-type-display').addEventListener('click', function () {
 
 document.querySelectorAll('.verse-level-pill').forEach(function (pill) {
   pill.addEventListener('click', function () {
-    // Changing level rebuilds _verseStatus/_verseCursor for the typing view's
-    // own cursor — mid-recitation that would both re-pop the (invisible,
-    // hands-free) keyboard and paint a stray "current word" box. Pick a
-    // level before starting to recite, not mid-session.
-    if (!_practiceVerse || VerseAudioPractice.isActive()) return;
+    if (!_practiceVerse) return;
     _verseLevel = Number(pill.dataset.level);
     setupVerseLevel();
   });
@@ -4669,7 +4660,7 @@ $('btn-verse-redo').addEventListener('click', function () {
 
 /** Move difficulty by one step, clamped to the 1–4 range. Restarts the level. */
 function stepVerseLevel(delta) {
-  if (!_practiceVerse || VerseAudioPractice.isActive()) return;
+  if (!_practiceVerse) return;
   const next = Math.min(4, Math.max(1, _verseLevel + delta));
   if (next === _verseLevel) return;
   _verseLevel = next;
@@ -4734,11 +4725,7 @@ document.addEventListener('keydown', function (e) {
   if (e.altKey || e.ctrlKey || e.metaKey) return;
   if (!versePracticeActive()) return;
 
-  if (VerseAudioPractice.isActive()) {
-    VerseAudioPractice.command('restart');
-  } else {
-    setupVerseLevel();
-  }
+  setupVerseLevel();
   e.preventDefault();
 });
 
@@ -5148,26 +5135,23 @@ const VOICE_COMMANDS = [
   ] },
 ];
 
-// The verse recitation loop has no "answer" to ask for and "done" means
-// something different from "stop" — reciting has finished, not the session
-// itself — so it gets its own small command set rather than overloading
-// VOICE_COMMANDS's "finish" / "i m done", which mean "end the session" there.
+// Verse audio practice just reads verses aloud and pages between them — a
+// much smaller vocabulary than the exam's Q&A commands, so it gets its own
+// list rather than overloading VOICE_COMMANDS's meanings for "next"/"stop".
 const VERSE_VOICE_COMMANDS = [
-  { id: 'done', phrases: [
-    'done', 'i m done', 'im done', 'that s it', 'thats it',
-    'that s the verse', 'thats the verse', 'finished', 'i m finished',
-    'im finished', 'check it', 'grade it', 'mark it', 'end of verse',
-  ] },
   { id: 'repeat', phrases: [
     'repeat', 'say again', 'say that again', 'again', 'come again',
-    'read it again', 'once more', 'repeat the reference', 'what verse is this',
+    'read it again', 'once more',
   ] },
-  { id: 'restart', phrases: [
-    'restart', 'start over', 'redo', 'try again', 'from the top', 'reset',
+  { id: 'next', phrases: [
+    'next', 'next verse', 'skip', 'skip verse', 'move on', 'go on',
+  ] },
+  { id: 'previous', phrases: [
+    'previous', 'previous verse', 'go back', 'back', 'last verse',
   ] },
   { id: 'stop', phrases: [
-    'stop', 'stop practice', 'stop practising', 'end session',
-    'exit', 'quit', 'cancel', 'never mind',
+    'stop', 'stop practice', 'stop practising', 'end session', 'end practice',
+    'exit', 'quit', 'done', 'i m done', 'im done', 'finished',
   ] },
 ];
 
@@ -5207,69 +5191,6 @@ function matchCommandFrom(text, commands) {
 
 function matchCommand(text) {
   return matchCommandFrom(text, VOICE_COMMANDS);
-}
-
-/* ─── Grading a recited verse ───────────────────────── */
-
-/**
- * Canonicalise one word of a verse for audio-mode alignment: lower-cased,
- * punctuation dropped rather than space-substituted — unlike normalizeAnswer,
- * a token here must stay exactly one recited word, so "God's" has to come out
- * as "gods", not split into "god" and "s" — and spelled-out numbers digitised
- * the same way a recogniser's transcript is, so "sixteen" lines up with "16".
- */
-function normalizeVerseWord(raw) {
-  return spokenNumbersToDigits(String(raw).toLowerCase().replace(/[^a-z0-9]/g, ''));
-}
-
-/**
- * Split a chunk of recognised speech into words for verse-recitation
- * grading. Deliberately not normalizeSpeech: that strips filler words and
- * "I think it's..." lead-ins for short Q&A answers, but "so", "well" and
- * "like" are real words in a lot of scripture, and a recited verse has no
- * dictation preamble to strip.
- */
-function verseWordsFrom(text) {
-  return String(text).trim().split(/\s+/).filter(Boolean).map(normalizeVerseWord).filter(Boolean);
-}
-
-/**
- * Align recited words to a verse's expected words, in order, tolerating the
- * same stems/typos as answer grading (wordsMatch). This is a longest-common-
- * subsequence match rather than a bag-of-words one, so a word said out of
- * order is not credited for a slot it wasn't actually said at — reciting
- * "so loved God the world" should not look like a clean pass on John 3:16.
- * Returns the expected-word indices that were recited, ascending.
- */
-function alignVerseWords(expectedWords, heardWords) {
-  const n = expectedWords.length;
-  const m = heardWords.length;
-  if (!n || !m) return [];
-
-  const dp = new Array(n + 1);
-  for (let i = 0; i <= n; i++) dp[i] = new Array(m + 1).fill(0);
-
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      dp[i][j] = wordsMatch(expectedWords[i - 1], heardWords[j - 1])
-        ? dp[i - 1][j - 1] + 1
-        : Math.max(dp[i - 1][j], dp[i][j - 1]);
-    }
-  }
-
-  const matched = [];
-  let i = n, j = m;
-  while (i > 0 && j > 0) {
-    if (wordsMatch(expectedWords[i - 1], heardWords[j - 1])) {
-      matched.push(i - 1);
-      i--; j--;
-    } else if (dp[i - 1][j] >= dp[i][j - 1]) {
-      i--;
-    } else {
-      j--;
-    }
-  }
-  return matched.reverse();
 }
 
 /* ─── Speech out (TTS) ──────────────────────────────── */
@@ -6416,27 +6337,26 @@ window.matchCommand = matchCommand;
 
 /* ═══════════════════════════════════════════════════════
    VERSE AUDIO PRACTICE
-   Hands-free recitation for the commute: the app names the
-   passage, then listens while the whole thing is recited from
-   memory. Rather than a separate screen, this drives the same
-   passage display the typing practice above uses — words light
-   up green as they're recognised, right where "Follow along" /
-   "Blanks" / "From memory" already mask and reveal them — so the
-   two practice modes share one model of "how far through this
-   verse am I."
+   Hands-free listening for the commute: the app reads a verse
+   aloud, then "repeat" / "next verse" / "previous verse" (by
+   voice, where supported, or the buttons) move through the rest
+   of the entry. No grading, no microphone-driven recitation
+   matching — just listen and page through, on-screen buttons
+   always work even where speech recognition doesn't (iOS has no
+   SpeechRecognition at all, in any browser).
    ═══════════════════════════════════════════════════════ */
 
 const VerseAudioPractice = (function () {
-  let engine       = null;
-  let active       = false;
-  let phase        = 'idle'; // idle | speaking | listening | judging | done
-  let wakeLock     = null;
-  let nudged       = false;
-  let silenceTimer = null;
-  let heardChunks  = []; // recognised final segments, in order, this attempt
-  let expected     = []; // normalized expected words, one per _verseModel wi
+  let engine   = null;
+  let active   = false;
+  let phase    = 'idle'; // idle | speaking | listening | done
+  let wakeLock = null;
+  let items    = []; // [{ref, text}] — the current entry's verses, in order
+  let index    = 0;
 
   /* — view helpers — */
+
+  function current() { return items[index] || null; }
 
   function setPhase(next) {
     phase = next;
@@ -6448,7 +6368,6 @@ const VerseAudioPractice = (function () {
     label.textContent =
       next === 'speaking'  ? 'Speaking…'  :
       next === 'listening' ? 'Listening…' :
-      next === 'judging'   ? 'Checking…'  :
       next === 'done'      ? 'Finished'   : '';
   }
 
@@ -6458,34 +6377,17 @@ const VerseAudioPractice = (function () {
     el.className = 'audio-notice' + (msg ? '' : ' hidden') + (kind ? ' audio-notice-' + kind : '');
   }
 
-  function setHeard(text) {
-    const el = $('verse-audio-heard');
-    el.textContent = text || '';
-    el.classList.toggle('hidden', !text);
-  }
-
-  function setVerdict(kind, text) {
-    const el = $('verse-audio-verdict');
-    el.textContent = text || '';
-    el.className = 'audio-verdict' + (text ? '' : ' hidden') + (kind ? ' audio-verdict-' + kind : '');
+  function render() {
+    const item = current();
+    $('verse-audio-position').textContent = items.length > 1 ? (index + 1) + ' / ' + items.length : '';
+    $('verse-audio-ref').textContent = item ? (item.ref || promptTitle()) : '';
+    $('verse-audio-text').textContent = item ? item.text : '';
+    $('btn-verse-audio-prev').disabled = index <= 0;
+    $('btn-verse-audio-next').disabled = index >= items.length - 1;
   }
 
   function promptTitle() {
-    return _verseEntry ? verseTitle(_verseEntry)
-      : (_verseQueue[0] && _verseQueue[0].ref) || 'this passage';
-  }
-
-  /**
-   * setupVerseLevel() is shared with the typing view, so it leaves the first
-   * word marked "current" and focuses the (here, invisible) typing field —
-   * on a phone that pops the keyboard, which is exactly what a hands-free
-   * mode must not do.
-   */
-  function resetDisplay() {
-    setupVerseLevel();
-    _verseCursor = -1;
-    renderVerseType();
-    $('verse-type-input').blur();
+    return (_verseEntry && verseTitle(_verseEntry)) || 'this verse';
   }
 
   /* — the loop — */
@@ -6497,132 +6399,47 @@ const VerseAudioPractice = (function () {
     return Speaker.speak(text);
   }
 
+  function speakCurrent() {
+    const item = current();
+    render();
+    if (!item) return;
+    const text = (item.ref ? item.ref + '. ' : '') + item.text;
+    say(text).then(function () { if (active) beginListening(); });
+  }
+
   function beginListening() {
-    if (!active || phase === 'done') return;
+    if (!active || !engine) return; // no STT available — buttons still work
     setPhase('listening');
-    nudged = false;
     engine.start({ onResult: onResult, onError: onEngineError });
-    armSilenceTimer();
   }
 
   function stopListening() {
-    clearTimeout(silenceTimer);
     if (engine) engine.stop();
   }
 
-  /** Same "don't rush them" philosophy as the exam's Audio Practice. */
-  function armSilenceTimer() {
-    clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(function () {
-      if (phase !== 'listening' || nudged) return;
-      nudged = true;
-      say('Still listening. Say done when you finish, or stop to end.')
-        .then(function () { if (active && phase === 'speaking') beginListening(); });
-    }, 20000);
-  }
-
   function onResult(alternatives, isFinal) {
-    if (phase !== 'listening') return; // ignore anything caught mid-sentence
-    const best = alternatives[0] || '';
-    setHeard((heardChunks.join(' ') + ' ' + best).trim());
-    if (!isFinal) return;
-
-    clearTimeout(silenceTimer);
-
-    // A command is often the recogniser's second guess, so every
-    // alternative gets a look before the utterance is added to the passage.
+    if (phase !== 'listening' || !isFinal) return;
     for (let i = 0; i < alternatives.length; i++) {
       const cmd = matchCommandFrom(alternatives[i], VERSE_VOICE_COMMANDS);
-      if (cmd) return runCommand(cmd);
+      if (cmd) { runCommand(cmd); return; }
     }
-
-    heardChunks.push(best);
-    applyAlignment();
-  }
-
-  /**
-   * Recompute which expected words have been recited, from everything
-   * heard so far, and light them up on the shared passage display. Cheap
-   * enough to redo from scratch on every final chunk (a handful of times
-   * per session, not per keystroke) and simpler than trying to patch a
-   * running alignment incrementally.
-   */
-  function applyAlignment() {
-    const heard = verseWordsFrom(heardChunks.join(' '));
-    alignVerseWords(expected, heard).forEach(function (wi) {
-      if (_verseStatus[wi] === 'pending') _verseStatus[wi] = 'correct';
-    });
-    _verseCursor = -1; // no single "current" word in audio mode
-    renderVerseType();
-    renderProgress();
-  }
-
-  function renderProgress() {
-    const total = _verseModel ? _verseModel.count : 0;
-    const fill  = $('verse-type-progress-fill');
-    const text  = $('verse-type-progress-text');
-    const bar   = $('verse-type-progress');
-    if (!fill || !total) return;
-
-    const got = _verseStatus.filter(function (s) { return s === 'correct'; }).length;
-    const pct = Math.round(got / total * 100);
-    fill.style.width = pct + '%';
-    text.textContent = phase === 'done'
-      ? 'Done!  ' + got + ' / ' + total + ' recited (' + pct + '%)'
-      : got + ' / ' + total + ' words recited';
-    bar.classList.toggle('vt-done', phase === 'done');
+    // Not a recognised command — the recogniser just keeps listening.
   }
 
   function runCommand(id) {
-    if (id === 'repeat') {
-      say('Recite ' + promptTitle() + ' from memory.')
-        .then(function () { if (active && phase === 'speaking') beginListening(); });
+    if (id === 'repeat') { speakCurrent(); return; }
+    if (id === 'next') {
+      if (index < items.length - 1) { index++; speakCurrent(); }
       return;
     }
-    if (id === 'restart') { restart(); return; }
-    if (id === 'done')    { finish();  return; }
-    if (id === 'stop')    { exit();    return; }
+    if (id === 'previous') {
+      if (index > 0) { index--; speakCurrent(); }
+      return;
+    }
+    if (id === 'stop') { exit(); return; }
   }
 
-  /** Reset to a fresh attempt at the current level, still inside the session. */
-  function restart() {
-    heardChunks = [];
-    resetDisplay();
-    renderProgress();
-    setVerdict(null, '');
-    setHeard('');
-    say('Recite ' + promptTitle() + ' from memory.')
-      .then(function () { if (active) beginListening(); });
-  }
-
-  /** The user has finished reciting: reveal what was missed and grade it. */
-  function finish() {
-    stopListening();
-    setPhase('judging');
-
-    _verseStatus.forEach(function (s, wi) {
-      if (s === 'pending') _verseStatus[wi] = 'wrong';
-    });
-    _verseCursor = _verseModel.count;
-    renderVerseType();
-
-    const total = _verseModel.count;
-    const got   = _verseStatus.filter(function (s) { return s === 'correct'; }).length;
-    const pct   = total ? Math.round(got / total * 100) : 0;
-    const kind  = pct >= 90 ? 'correct' : pct >= 60 ? 'close' : 'wrong';
-
-    setPhase('done');
-    renderProgress();
-    setVerdict(kind, got + ' / ' + total + ' words (' + pct + '%)');
-    releaseWakeLock();
-
-    // Speaker.speak() directly, not say() — say() flips the phase back to
-    // "speaking" for the interactive loop, which would overwrite the "done"
-    // orb we just set for a summary that has nothing left to listen for.
-    Speaker.speak('Finished. ' + got + ' out of ' + total + ' words, ' + pct + ' percent.');
-  }
-
-  /* — screen wake lock — */
+  /* — screen wake lock, so a pocketed phone keeps reading — */
 
   function requestWakeLock() {
     if (!navigator.wakeLock) return;
@@ -6637,134 +6454,65 @@ const VerseAudioPractice = (function () {
     wakeLock = null;
   }
 
-  /* — errors — */
-
+  /**
+   * Voice commands are a bonus here, not a requirement — reading the verse
+   * aloud and the on-screen buttons always work. iOS has no
+   * SpeechRecognition at all, in any browser, so any failure here just
+   * falls back to the buttons instead of blocking the feature.
+   */
   function onEngineError(code) {
     if (code === 'not-allowed' || code === 'service-not-allowed') {
-      setNotice('Microphone access was denied. Allow it in your browser’s site settings, then start audio practice again.', 'error');
-      setPhase('idle');
-      stopListening();
-      return;
-    }
-    if (code === 'network') {
-      setNotice('Speech recognition needs a connection on this device — the browser’s recogniser is not on-device here.', 'error');
+      setNotice('Microphone access was denied — use the buttons below instead.', null);
+      engine = null;
       return;
     }
     if (code === 'unsupported') {
-      setNotice('This browser has no speech recognition. Try Chrome.', 'error');
-      setPhase('idle');
+      setNotice('Voice commands aren’t supported in this browser — use the buttons below.', null);
+      engine = null;
       return;
     }
-    setNotice('Speech recognition error: ' + code, 'error');
-  }
-
-  /**
-   * Get the chosen engine ready, and fall back to the browser recogniser if
-   * the offline one cannot start — same reasoning as the exam's Audio
-   * Practice: a cleared cache or a half-finished download should cost you
-   * the offline guarantee, not the session.
-   */
-  function prepareEngine() {
-    return engine.prepare().catch(function (err) {
-      if (engine instanceof WebSpeechEngine) throw err;
-
-      const reason = (err && err.message) || 'unknown';
-      const modelUnusable = reason === 'model-not-downloaded' ||
-                            reason === 'model-corrupt' ||
-                            reason === 'model-load-failed' ||
-                            reason === 'model-load-timeout';
-      if (modelUnusable) localStorage.removeItem(KEYS.voskModel);
-
-      const fallback = new WebSpeechEngine();
-      if (!fallback.isSupported()) throw err;
-
-      if (engine.release) engine.release();
-      engine = fallback;
-      setNotice('Offline recognition is not set up on this device — using the browser recogniser, which needs a connection.', null);
-      return engine.prepare();
-    });
-  }
-
-  function showEngineNote(offline) {
-    $('verse-audio-engine-note').textContent = offline
-      ? 'On-device recognition · works offline'
-      : 'Browser recognition · needs a connection on this device';
-
-    const setup = $('btn-verse-audio-offline');
-    const canOffline = !offline && new VoskEngine().isSupported();
-    setup.classList.toggle('hidden', !canOffline);
-    setup.textContent = 'Enable offline';
-  }
-
-  /** One-time 39MB download, shared with the exam's Audio Practice model. */
-  function setupOffline() {
-    const btn = $('btn-verse-audio-offline');
-    if (btn.disabled) return;
-
-    btn.disabled = true;
-    btn.textContent = 'Downloading… 0%';
-
-    downloadVoskModel(function (loaded, total) {
-      btn.textContent = total
-        ? 'Downloading… ' + Math.round((loaded / total) * 100) + '%'
-        : 'Downloading… ' + Math.round(loaded / 1048576) + 'MB';
-    }).then(function () {
-      return loadVoskLib();
-    }).then(function () {
-      btn.classList.add('hidden');
-      btn.disabled = false;
-      setNotice('Offline recognition is ready. It takes effect the next time you start audio practice.', 'ok');
-    }).catch(function (err) {
-      btn.disabled = false;
-      btn.textContent = 'Enable offline';
-      const offlineNow = !navigator.onLine;
-      setNotice(offlineNow
-        ? 'That download needs a connection. Try it before you set off.'
-        : 'Could not download the offline model (' + ((err && err.message) || 'failed') + ').', 'error');
-    });
+    // Anything else (a network hiccup, a no-speech timeout) is transient —
+    // the engine keeps listening on its own; nothing worth showing.
   }
 
   /* — entry / exit — */
 
   function enter() {
-    if (active || !_verseModel) return;
+    if (active || !_verseEntry) return;
 
     if (!Speaker.supported()) {
       showConfirm('This browser cannot speak text aloud, so audio practice will not work here.', 'OK', function () {});
       return;
     }
-    engine = createSttEngine();
-    if (!engine.isSupported()) {
-      showConfirm('This browser has no speech recognition. Audio practice needs Chrome (desktop or Android).', 'OK', function () {});
-      return;
-    }
 
-    expected = _verseModel.words;
-    if (!expected.length) return;
+    items = normalizeVerseEntry(_verseEntry);
+    if (!items.length) return;
+    index = (_verseItemIndex >= 0 && _verseItemIndex < items.length) ? _verseItemIndex : 0;
 
-    active      = true;
-    heardChunks = [];
-    resetDisplay();
-
+    active = true;
     BackStack.push('verse-audio', exit);
-    $('verse-type-actions').classList.add('hidden');
+    $('verse-typing-mode').classList.add('hidden');
     $('verse-audio-panel').classList.remove('hidden');
     $('btn-verse-audio-toggle').textContent = '✕ Exit audio practice';
     setNotice('', null);
-    setHeard('');
-    setVerdict(null, '');
-    renderProgress();
-    setPhase('speaking');
+    requestWakeLock();
+
+    const sttEngine = createSttEngine();
+    if (!sttEngine.isSupported()) {
+      speakCurrent(); // no voice commands on this browser — buttons only
+      return;
+    }
 
     ensureMicPermission().then(function (granted) {
-      if (!granted) { onEngineError('not-allowed'); return; }
-      requestWakeLock();
-      return prepareEngine().then(function () {
-        showEngineNote(!!(engine.offline));
-        return say('Audio practice. Recite ' + promptTitle() + ' from memory. ' +
-            'Say done when you finish, repeat to hear this again, or stop to end.')
-          .then(beginListening);
-      });
+      if (!granted) {
+        setNotice('Microphone access was denied — use the buttons below instead.', null);
+        speakCurrent();
+        return;
+      }
+      engine = sttEngine;
+      engine.prepare()
+        .catch(function () { /* best-effort — reading aloud still works without it */ })
+        .then(function () { speakCurrent(); });
     });
   }
 
@@ -6775,28 +6523,25 @@ const VerseAudioPractice = (function () {
     Speaker.cancel();
     releaseWakeLock();
     if (engine && engine.release) engine.release();
-    engine  = null;
-    active  = false;
-    phase   = 'idle';
+    engine = null;
+    active = false;
+    phase  = 'idle';
 
-    $('verse-type-actions').classList.remove('hidden');
+    $('verse-typing-mode').classList.remove('hidden');
     $('verse-audio-panel').classList.add('hidden');
     $('btn-verse-audio-toggle').textContent = '🎧 Audio practice';
-
-    setupVerseLevel(); // clean slate back in typing mode
   }
 
   function toggle() {
-    if (!_verseModel) return;
+    if (!_verseEntry) return;
     if (active) exit(); else enter();
   }
 
   return {
-    toggle:       toggle,
-    exit:         exit,
-    command:      runCommand,
-    setupOffline: setupOffline,
-    isActive:     function () { return active; },
+    toggle:   toggle,
+    exit:     exit,
+    command:  runCommand,
+    isActive: function () { return active; },
   };
 })();
 
@@ -6806,22 +6551,17 @@ $('btn-verse-audio-toggle').addEventListener('click', function () {
   VerseAudioPractice.toggle();
 });
 $('btn-verse-audio-selected').addEventListener('click', function () {
-  if (!_verseEntry || _verseSelectedIdx.size === 0) return;
-  const items = normalizeVerseEntry(_verseEntry);
-  const idxs = Array.from(_verseSelectedIdx).sort(function (a, b) { return a - b; });
-  const selected = idxs.map(function (i) { return items[i]; });
-  beginVerseSession(selected, true, selected.length === 1 ? idxs[0] : -1);
+  if (!_verseEntry) return;
+  beginVerseSession(normalizeVerseEntry(_verseEntry), true, -1);
   VerseAudioPractice.toggle();
 });
 
-$('btn-verse-audio-offline').addEventListener('click', function () { VerseAudioPractice.setupOffline(); });
 $('btn-verse-audio-repeat').addEventListener('click', function () { VerseAudioPractice.command('repeat'); });
-$('btn-verse-audio-restart').addEventListener('click', function () { VerseAudioPractice.command('restart'); });
-$('btn-verse-audio-done').addEventListener('click', function () { VerseAudioPractice.command('done'); });
-$('btn-verse-audio-stop').addEventListener('click', function () { VerseAudioPractice.exit(); });
+$('btn-verse-audio-prev').addEventListener('click',   function () { VerseAudioPractice.command('previous'); });
+$('btn-verse-audio-next').addEventListener('click',   function () { VerseAudioPractice.command('next'); });
+$('btn-verse-audio-stop').addEventListener('click',   function () { VerseAudioPractice.exit(); });
 
 window.VerseAudioPractice = VerseAudioPractice;
-window.alignVerseWords = alignVerseWords;
 
 /* ═══════════════════════════════════════════════════════
    INITIALISE

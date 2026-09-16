@@ -2786,8 +2786,43 @@ main {
   margin-top: 1rem;
 }
 
+/* On its own row below the header — never sharing a line with the back
+   button and a (possibly long) verse title, which is what let it run off
+   the edge of a phone screen. */
+.verse-audio-toggle-row {
+  margin-bottom: 1rem;
+}
+
 .verse-audio-panel {
   margin-top: 1rem;
+}
+
+.verse-audio-position {
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-subtle);
+  min-height: 1.2em;
+}
+
+.verse-audio-current {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+}
+
+.verse-audio-ref {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.4rem;
+}
+
+.verse-audio-text {
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-line;
 }
 
 /* Practice header heading + subtitle */
