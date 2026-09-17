@@ -2859,6 +2859,13 @@ main {
   gap: 0.5rem;
   margin-left: auto;
 }
+/* Kept as a single flex item so Audio practice and Practice selected wrap
+   onto a new line together rather than splitting across two rows. */
+.verse-select-primary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
 .verse-select-list {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -3267,6 +3274,10 @@ main {
   .trainer-mode-row { width: 100%; }
   .trainer-mode-row .mode-toggle { flex: 1 1 100%; }
   .btn-audio { width: 100%; min-height: 44px; }
+
+  /* In the verse-selection toolbar the audio button sits inline next to
+     "Practice selected" instead of stacking full-width. */
+  .verse-select-actions .btn-audio { width: auto; min-height: auto; }
 
   .audio-question { font-size: 1.1rem; }
   .audio-controls .btn { flex: 1; min-width: 6.5rem; min-height: 44px; }

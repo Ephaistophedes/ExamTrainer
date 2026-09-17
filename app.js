@@ -6485,9 +6485,22 @@ const VerseAudioPractice = (function () {
       return;
     }
 
-    items = normalizeVerseEntry(_verseEntry);
-    if (!items.length) return;
-    index = (_verseItemIndex >= 0 && _verseItemIndex < items.length) ? _verseItemIndex : 0;
+    if (_verseItemIndex >= 0) {
+      // Paging a single verse within its entry — read the whole entry back
+      // verse-by-verse, starting where typing practice left off.
+      items = normalizeVerseEntry(_verseEntry);
+      if (!items.length) return;
+      index = (_verseItemIndex < items.length) ? _verseItemIndex : 0;
+    } else {
+      // A multi-verse "Practice selected" chunk — read it combined as one
+      // continuous passage, matching the typing view instead of paging.
+      const refs = _verseQueue.map(function (it) { return it.ref; }).filter(Boolean);
+      items = [{
+        ref:  refs.length ? condenseRefs(refs) : '',
+        text: _verseQueue.map(function (it) { return it.text; }).join('\n\n'),
+      }];
+      index = 0;
+    }
 
     active = true;
     BackStack.push('verse-audio', exit);
@@ -6551,8 +6564,11 @@ $('btn-verse-audio-toggle').addEventListener('click', function () {
   VerseAudioPractice.toggle();
 });
 $('btn-verse-audio-selected').addEventListener('click', function () {
-  if (!_verseEntry) return;
-  beginVerseSession(normalizeVerseEntry(_verseEntry), true, -1);
+  if (!_verseEntry || _verseSelectedIdx.size === 0) return;
+  const items = normalizeVerseEntry(_verseEntry);
+  const idxs = Array.from(_verseSelectedIdx).sort(function (a, b) { return a - b; });
+  const selected = idxs.map(function (i) { return items[i]; });
+  beginVerseSession(selected, true, selected.length === 1 ? idxs[0] : -1);
   VerseAudioPractice.toggle();
 });
 

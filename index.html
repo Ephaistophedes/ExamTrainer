@@ -346,9 +346,13 @@
           <div class="verse-select-actions">
             <button id="btn-verse-select-all" class="btn btn-ghost">Select All</button>
             <button id="btn-verse-select-none" class="btn btn-ghost">Clear</button>
-            <button id="btn-verse-audio-selected" class="btn btn-secondary btn-sm btn-audio"
-                    title="Listen to this passage read aloud">&#x1F3A7; Audio practice</button>
-            <button id="btn-verse-practice-selected" class="btn btn-primary btn-sm">Practice selected</button>
+            <!-- Grouped so they wrap onto a new line together instead of
+                 Audio practice landing next to Select All/Clear instead. -->
+            <div class="verse-select-primary">
+              <button id="btn-verse-audio-selected" class="btn btn-secondary btn-sm btn-audio"
+                      title="Listen to this passage read aloud">&#x1F3A7; Audio practice</button>
+              <button id="btn-verse-practice-selected" class="btn btn-primary btn-sm">Practice selected</button>
+            </div>
           </div>
         </div>
         <div id="verse-select-list" class="verse-select-list"></div>
