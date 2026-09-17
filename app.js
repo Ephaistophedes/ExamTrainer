@@ -4344,13 +4344,23 @@ $('btn-verse-select-none').addEventListener('click', function () {
   updateVerseSelectCount();
 });
 
-$('btn-verse-practice-selected').addEventListener('click', function () {
-  if (!_verseEntry || _verseSelectedIdx.size === 0) return;
-  const items = normalizeVerseEntry(_verseEntry);
-  const idxs = Array.from(_verseSelectedIdx).sort(function (a, b) { return a - b; });
+/**
+ * Start a session on exactly the verses ticked here, in the order they are
+ * written. Shared by both buttons in this view so that listening to a
+ * selection and typing it cover the same passage.
+ */
+function beginSelectedVerseSession() {
+  if (!_verseEntry || _verseSelectedIdx.size === 0) return false;
+  const items    = normalizeVerseEntry(_verseEntry);
+  const idxs     = Array.from(_verseSelectedIdx).sort(function (a, b) { return a - b; });
   const selected = idxs.map(function (i) { return items[i]; });
   // A single-verse selection can still page forward through the entry.
   beginVerseSession(selected, true, selected.length === 1 ? idxs[0] : -1);
+  return true;
+}
+
+$('btn-verse-practice-selected').addEventListener('click', function () {
+  beginSelectedVerseSession();
 });
 
 function exitVerseSelect() {
@@ -4361,6 +4371,27 @@ function exitVerseSelect() {
 }
 
 $('btn-verse-select-back').addEventListener('click', exitVerseSelect);
+
+/**
+ * Which verses an audio session reads, and which one it opens on.
+ *
+ * The session's own queue is the answer: three verses ticked in the
+ * selection view are the three that get read, not the twelve they were
+ * picked from. The exception is a single verse, which the typing view lets
+ * you page through the entry from — the audio panel keeps that, loading the
+ * whole entry and starting on the verse in hand, so next and previous walk
+ * the rest of it.
+ */
+function verseSessionItems(all, queue, itemIndex) {
+  const entry  = all || [];
+  const picked = queue || [];
+
+  if (picked.length === 1 && itemIndex >= 0 && itemIndex < entry.length) {
+    return { items: entry, index: itemIndex };
+  }
+  if (picked.length) return { items: picked, index: 0 };
+  return { items: entry, index: 0 };
+}
 
 /* ─── Practice session ─────────────────────────────── */
 
@@ -6757,9 +6788,10 @@ const VerseAudioPractice = (function () {
       return;
     }
 
-    items = normalizeVerseEntry(_verseEntry);
+    const session = verseSessionItems(normalizeVerseEntry(_verseEntry), _verseQueue, _verseItemIndex);
+    items = session.items;
     if (!items.length) return;
-    index = (_verseItemIndex >= 0 && _verseItemIndex < items.length) ? _verseItemIndex : 0;
+    index = session.index;
 
     // Still inside the tap: Chrome for Android refuses to speak without a
     // gesture behind it, and the first verse is read out only after the
@@ -6775,6 +6807,11 @@ const VerseAudioPractice = (function () {
     $('btn-verse-audio-toggle').textContent = '✕ Exit audio practice';
     setNotice('', null);
     requestWakeLock();
+
+    // The verse goes up now, not when the microphone prompt and the
+    // recogniser are finally done with it — an empty panel while that
+    // happens says nothing about which verses are about to be read.
+    render();
 
     const sttEngine = createSttEngine();
     if (!sttEngine.isSupported()) {
@@ -6831,8 +6868,7 @@ $('btn-verse-audio-toggle').addEventListener('click', function () {
   VerseAudioPractice.toggle();
 });
 $('btn-verse-audio-selected').addEventListener('click', function () {
-  if (!_verseEntry) return;
-  beginVerseSession(normalizeVerseEntry(_verseEntry), true, -1);
+  if (!beginSelectedVerseSession()) return;
   VerseAudioPractice.toggle();
 });
 

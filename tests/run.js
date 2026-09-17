@@ -39,8 +39,10 @@ function slice(startMarker, endMarker) {
 const base   = slice('function normalizeAnswer(str)', '/* ─── Results Panel');
 // ...the grading and command layer...
 const audio  = slice('const SPOKEN_NUMBERS', '/* ─── Speech out (TTS)');
-// ...and the pure text-shaping helpers used for what gets spoken.
+// ...the pure text-shaping helpers used for what gets spoken...
 const speech = slice('function chunkForSpeech', '/* ─── Speech in (STT)');
+// ...and the rule for which verses a listening session covers.
+const verse  = slice('function verseSessionItems', '/* ─── Practice session');
 
 // ...plus the speech engine itself, which is built per scenario below
 // against a fake engine, since what it does with a phone that will not
@@ -51,12 +53,12 @@ const EXPORTS = [
   'normalizeSpeech', 'spokenNumbersToDigits', 'canonicalizeRefs', 'extractRefs',
   'matchSpokenAnswer', 'matchCommand', 'speakableAnswer', 'speakableQuestion',
   'chunkForSpeech', 'matchCommandFrom', 'VERSE_VOICE_COMMANDS',
-  'speechFailureMessage',
+  'speechFailureMessage', 'verseSessionItems',
 ];
 
 const mod = { exports: {} };
 new Function('module', 'exports', 'window',
-  base + '\n' + audio + '\n' + speech +
+  base + '\n' + audio + '\n' + speech + '\n' + verse +
   '\nmodule.exports = { ' + EXPORTS.join(', ') + ' };'
 )(mod, mod.exports, {});
 
@@ -64,6 +66,7 @@ const {
   matchSpokenAnswer, matchCommand, speakableAnswer, speakableQuestion,
   chunkForSpeech, canonicalizeRefs, spokenNumbersToDigits,
   matchCommandFrom, VERSE_VOICE_COMMANDS, speechFailureMessage,
+  verseSessionItems,
 } = mod.exports;
 
 /* ─── A phone that will not speak ───────────────────── */
@@ -322,6 +325,34 @@ check('range connectors between numbers drop out',
       canonicalizeRefs('exodus 19 5 to 6'), 'exodus 19 5 6');
 check('"and" between words is kept',
       canonicalizeRefs('heaven and eternal life'), 'heaven and eternal life');
+
+group('Verse audio — the session is what was selected');
+
+const JOHN = [
+  { ref: 'John 1:1', text: 'In the beginning was the Word.' },
+  { ref: 'John 1:2', text: 'He was with God in the beginning.' },
+  { ref: 'John 1:3', text: 'Through him all things were made.' },
+  { ref: 'John 1:4', text: 'In him was life.' },
+];
+
+function refsOf(session) {
+  return session.items.map(function (it) { return it.ref; });
+}
+
+check('a selection is read, not the entry it came from',
+      refsOf(verseSessionItems(JOHN, [JOHN[1], JOHN[2]], -1)), ['John 1:2', 'John 1:3']);
+check('...starting on the first verse selected',
+      verseSessionItems(JOHN, [JOHN[1], JOHN[2]], -1).index, 0);
+check('the whole entry selected is still the whole entry',
+      refsOf(verseSessionItems(JOHN, JOHN, -1)).length, 4);
+check('one verse, pageable, opens the entry on that verse',
+      verseSessionItems(JOHN, [JOHN[2]], 2), { items: JOHN, index: 2 });
+check('one verse with no place in the entry stands alone',
+      refsOf(verseSessionItems(JOHN, [JOHN[2]], -1)), ['John 1:3']);
+check('a position past the end of the entry is ignored',
+      refsOf(verseSessionItems(JOHN, [JOHN[0]], 9)), ['John 1:1']);
+check('no session at all falls back to the whole entry',
+      verseSessionItems(JOHN, [], -1), { items: JOHN, index: 0 });
 
 /* ═══ Speaking, and failing to speak ═════════════════ */
 
