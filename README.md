@@ -75,6 +75,28 @@ back expanded ("Matthew 17 verse 27") rather than as written. A near miss is mar
 results are **not** written to attempt history — they are speech-graded, and letting
 them feed Weak Areas would change what the typed Practice mode shows you.
 
+### When nothing is read aloud
+
+Reading aloud is the **phone's** text-to-speech engine, not the app's — the app can
+only ask. Two things go wrong on Android, and neither one used to say so:
+
+- **No engine, or no English voice data.** `window.speechSynthesis` exists on every
+  Android Chrome whether or not there is an engine behind it, so the app cannot tell
+  by asking. It lists no voices and drops every utterance in silence. Fix it under
+  **Settings → Accessibility → Text-to-speech output**: pick an engine (Google
+  Text-to-Speech / *Speech Recognition and Synthesis*), install the English voice
+  data, and tap **Play a sample** to confirm.
+- **Chrome refusing to speak without a tap.** Speech has to be started by a user
+  gesture. A session's first line is spoken after the microphone prompt and the
+  recogniser setup, by which time the tap that started it no longer counts — so a
+  silent utterance now goes out on the tap itself to unlock the engine, and the
+  **↻ Repeat** button re-speaks from inside a tap if it is still blocked.
+
+Either way the session now says what happened instead of running on in silence, in
+the notice above the question, ending with the raw reason in brackets —
+`[no-start · 0 voices]` — which is the bit to quote if it needs chasing down. The
+session keeps going: the question stays on screen and answers are still graded.
+
 ### Offline
 
 Text-to-speech is on-device and works offline (given the system voice data is

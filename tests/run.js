@@ -42,10 +42,16 @@ const audio  = slice('const SPOKEN_NUMBERS', '/* ─── Speech out (TTS)');
 // ...and the pure text-shaping helpers used for what gets spoken.
 const speech = slice('function chunkForSpeech', '/* ─── Speech in (STT)');
 
+// ...plus the speech engine itself, which is built per scenario below
+// against a fake engine, since what it does with a phone that will not
+// speak is the whole point of it.
+const speaker = slice('const Speaker = (function ()', 'function chunkForSpeech');
+
 const EXPORTS = [
   'normalizeSpeech', 'spokenNumbersToDigits', 'canonicalizeRefs', 'extractRefs',
   'matchSpokenAnswer', 'matchCommand', 'speakableAnswer', 'speakableQuestion',
   'chunkForSpeech', 'matchCommandFrom', 'VERSE_VOICE_COMMANDS',
+  'speechFailureMessage',
 ];
 
 const mod = { exports: {} };
@@ -57,8 +63,66 @@ new Function('module', 'exports', 'window',
 const {
   matchSpokenAnswer, matchCommand, speakableAnswer, speakableQuestion,
   chunkForSpeech, canonicalizeRefs, spokenNumbersToDigits,
-  matchCommandFrom, VERSE_VOICE_COMMANDS,
+  matchCommandFrom, VERSE_VOICE_COMMANDS, speechFailureMessage,
 } = mod.exports;
+
+/* ─── A phone that will not speak ───────────────────── */
+
+/**
+ * The speech engine, wired to a fake browser one whose behaviour the test
+ * chooses, on a clock the test drives. Timers and Date are passed in so a
+ * five-second wait for an utterance that never starts costs nothing here.
+ */
+function buildSpeaker(behaviour) {
+  const opts = behaviour || {};
+  let now    = 0;
+  const timers = [];
+
+  const clock = {
+    setTimeout: function (fn, ms) {
+      const t = { at: now + ms, fn: fn };
+      timers.push(t);
+      return t;
+    },
+    clearTimeout: function (t) { if (t) t.cancelled = true; },
+    advance: function (ms) {
+      now += ms;
+      timers.slice().forEach(function (t) {
+        if (t.cancelled || t.fired || t.at > now) return;
+        t.fired = true;
+        t.fn();
+      });
+    },
+  };
+
+  const spoken = [];
+
+  function Utterance(text) { this.text = text; }
+
+  const synth = {
+    cancelled: 0,
+    getVoices: function () { return opts.voices || []; },
+    addEventListener: function () {},
+    cancel: function () { this.cancelled++; },
+    speak: function (u) {
+      spoken.push(u);
+      if (opts.onSpeak) opts.onSpeak(u, clock, now);
+    },
+  };
+
+  const win = opts.noApi ? {} : { speechSynthesis: synth, SpeechSynthesisUtterance: Utterance };
+  const nav = { userAgent: opts.userAgent || 'Mozilla/5.0 (Linux; Android 14; Pixel) Chrome/126' };
+
+  const m = { exports: {} };
+  new Function('module', 'window', 'navigator', 'setTimeout', 'clearTimeout', 'Date',
+    speaker + '\n' + speech + '\nmodule.exports = Speaker;'
+  )(m, win, nav, clock.setTimeout, clock.clearTimeout, { now: function () { return now; } });
+
+  return { Speaker: m.exports, clock: clock, spoken: spoken, synth: synth };
+}
+
+/** Let the promise chain run between clock moves. */
+function tick() { return new Promise(function (r) { setImmediate(r); }); }
 
 /* ─── Tiny assertion harness ────────────────────────── */
 
@@ -259,13 +323,151 @@ check('range connectors between numbers drop out',
 check('"and" between words is kept',
       canonicalizeRefs('heaven and eternal life'), 'heaven and eternal life');
 
+/* ═══ Speaking, and failing to speak ═════════════════ */
+
+/**
+ * Every case here used to resolve as though the words had been read out,
+ * which is exactly how a phone with no working text-to-speech engine ran a
+ * whole session in silence without ever saying why.
+ */
+async function speakingTests() {
+  group('Speech out — a phone that will not speak says so');
+
+  {
+    const s = buildSpeaker({ noApi: true });
+    check('no speech synthesis at all: supported() is false', s.Speaker.supported(), false);
+    check('no speech synthesis at all: speak() reports it',
+          await s.Speaker.speak('Question one.'), { spoke: false, code: 'no-api' });
+  }
+
+  {
+    // The Android case: the API is there, the engine behind it is not, and
+    // the utterance simply vanishes — no start, no end, no error.
+    const s = buildSpeaker({ voices: [], onSpeak: function () { /* dropped */ } });
+    const p = s.Speaker.speak('Question one.');
+    await tick();
+    s.clock.advance(5000);
+    check('dropped utterance is a failure, not a success',
+          await p, { spoke: false, code: 'no-start' });
+    check('...and the reason blames the missing voices',
+          /no text-to-speech voices installed/.test(
+            speechFailureMessage('no-start', s.Speaker.diagnose('no-start'))), true);
+  }
+
+  {
+    // The other Android case: an engine that reports the utterance finished
+    // the moment it is handed over, having made no sound.
+    const s = buildSpeaker({ voices: [], onSpeak: function (u) { u.onend(); } });
+    check('an utterance that ends without ever starting is a failure',
+          await s.Speaker.speak('Question one.'), { spoke: false, code: 'no-sound' });
+    check('...and it is retried, since it costs nothing',
+          (await s.Speaker.speak('Question two.')) && s.spoken.length, 2);
+  }
+
+  {
+    // Chrome for Android refusing to speak without a tap behind it.
+    const s = buildSpeaker({
+      voices:  [{ lang: 'en-US', localService: true }],
+      onSpeak: function (u) { u.onerror({ error: 'not-allowed' }); },
+    });
+    check('a blocked utterance reports why',
+          await s.Speaker.speak('Question one.'), { spoke: false, code: 'not-allowed' });
+    check('...and the reason points at the tap',
+          /Repeat/.test(speechFailureMessage('not-allowed', s.Speaker.diagnose('not-allowed'))), true);
+    check('...and the rest of the session does not wait on it again',
+          (await s.Speaker.speak('Question two.')) && s.spoken.length, 1);
+  }
+
+  {
+    let blocked = true;
+    const s = buildSpeaker({
+      voices: [{ lang: 'en-US', localService: true }],
+      onSpeak: function (u, clock) {
+        if (blocked) { u.onerror({ error: 'not-allowed' }); return; }
+        u.onstart();
+        clock.setTimeout(function () { u.onend(); }, 500);
+      },
+    });
+    await s.Speaker.speak('Question one.');
+    blocked = false;
+    s.Speaker.reset();
+    const p = s.Speaker.speak('Question one.');
+    await tick();
+    s.clock.advance(500);
+    check('a tap clears the verdict and speaks again', await p, { spoke: true, code: null });
+    check('...having cleared the queue first', s.synth.cancelled, 1);
+  }
+
+  {
+    const s = buildSpeaker({
+      voices:  [{ lang: 'en-US', localService: true }],
+      onSpeak: function (u, clock) { u.onstart(); clock.setTimeout(function () { u.onend(); }, 900); },
+    });
+    const p = s.Speaker.speak('Question one.');
+    await tick();
+    s.clock.advance(900);
+    check('a working engine still just works', await p, { spoke: true, code: null });
+  }
+
+  {
+    // Stop, and the cancel() on the way out of a session, arrive as errors.
+    const s = buildSpeaker({
+      voices:  [{ lang: 'en-US', localService: true }],
+      onSpeak: function (u) { u.onstart(); u.onerror({ error: 'interrupted' }); },
+    });
+    check('being interrupted is not an engine failure',
+          await s.Speaker.speak('Question one.'), { spoke: true, code: null });
+  }
+
+  {
+    const s = buildSpeaker({ voices: [], onSpeak: function () { /* dropped */ } });
+    const p = s.Speaker.speak('One. Two. Three.');
+    await tick();
+    s.clock.advance(5000);
+    await p;
+    check('a dead engine is not handed the rest of the sentences', s.spoken.length, 1);
+  }
+
+  {
+    const s = buildSpeaker({ voices: [], onSpeak: function (u) { u.onerror({ error: 'not-allowed' }); } });
+    s.Speaker.prime();
+    check('the unlock utterance goes out silently', s.spoken.length && s.spoken[0].volume, 0);
+    check('...and what it learned is carried into the diagnosis',
+          s.Speaker.diagnose('no-start').prime, 'not-allowed');
+  }
+
+  group('Speech out — the reason, in words and in a code');
+
+  const androidNoVoices = { voices: 0, android: true };
+  check('missing voice data names where to install it',
+        /Settings → Accessibility → Text-to-speech output/.test(
+          speechFailureMessage('no-start', androidNoVoices)), true);
+  check('every message ends with the raw reason',
+        /\[no-start · 0 voices\]$/.test(speechFailureMessage('no-start', androidNoVoices)), true);
+  check('one voice is not "1 voices"',
+        /1 voice\]/.test(speechFailureMessage('audio-busy', { voices: 1 })), true);
+  check('an engine with voices that failed is not told to install voices',
+        /no text-to-speech voices installed/.test(
+          speechFailureMessage('no-start', { voices: 4, android: true })), false);
+  check('an unknown code still reports itself',
+        speechFailureMessage('wobbly', { voices: 2 }),
+        'The text-to-speech engine could not read the text aloud. [wobbly · 2 voices]');
+}
+
 /* ─── Report ────────────────────────────────────────── */
 
-console.log('');
-if (failures.length) {
-  console.log('FAILURES\n');
-  console.log(failures.join('\n\n'));
+function report() {
   console.log('');
+  if (failures.length) {
+    console.log('FAILURES\n');
+    console.log(failures.join('\n\n'));
+    console.log('');
+  }
+  console.log(pass + ' passed, ' + failures.length + ' failed');
+  process.exit(failures.length ? 1 : 0);
 }
-console.log(pass + ' passed, ' + failures.length + ' failed');
-process.exit(failures.length ? 1 : 0);
+
+speakingTests().then(report, function (err) {
+  console.error('\nthe speech tests threw:\n', err);
+  process.exit(1);
+});

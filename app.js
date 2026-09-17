@@ -5195,11 +5195,56 @@ function matchCommand(text) {
 
 /* ─── Speech out (TTS) ──────────────────────────────── */
 
+/**
+ * Text-to-speech.
+ *
+ * The API object existing proves nothing on a phone. Chrome for Android
+ * always exposes window.speechSynthesis, whether or not there is a working
+ * engine behind it: a device with its text-to-speech engine disabled, or
+ * with no English voice data installed, lists no voices and then drops
+ * every utterance without a sound. Chrome for Android also refuses to
+ * speak at all unless a tap started it, which a session's first line —
+ * spoken after the microphone prompt and the recogniser setup — no longer
+ * counts as.
+ *
+ * Both failures used to look exactly like success: the error event was
+ * discarded and the chain resolved as though the words had been read out,
+ * so the session ran to the end in silence with nothing to explain it. So
+ * every utterance now reports what happened, and speak() resolves with
+ * { spoke, code } rather than swallowing it.
+ */
 const Speaker = (function () {
-  const synth = window.speechSynthesis;
-  let voice   = null;
+  const synth     = window.speechSynthesis;
+  const Utterance = window.SpeechSynthesisUtterance;
 
-  function supported() { return !!synth; }
+  let voice       = null;
+  let broken      = null; // sticky failure code, cleared by reset() or a sound
+  let primeCode   = null; // what the unlock utterance made of this device
+  let recoverHook = null;
+
+  // A dropped utterance is silent in both directions: no onstart, no
+  // onerror, nothing. Five seconds is past any engine warming up and well
+  // short of the end-of-speech watchdog below.
+  const START_MS = 5000;
+
+  // Failures that are the device, not the moment: retrying every utterance
+  // against one would spend START_MS of silence per chunk to reach the same
+  // answer. Two are deliberately left out — 'audio-busy', because another
+  // app holding the output is temporary and errors immediately rather than
+  // hanging, and 'no-sound', because it is cheap to try again and a device
+  // that speaks without announcing a start must not be written off over it.
+  const STICKY = {
+    'no-start': true, 'not-allowed': true, 'synthesis-unavailable': true,
+    'synthesis-failed': true, 'language-unavailable': true, 'voice-unavailable': true,
+  };
+
+  function supported() { return !!synth && !!Utterance; }
+
+  /** How many voices the device actually offers. Zero means no engine. */
+  function voiceCount() {
+    if (!supported()) return 0;
+    try { return (synth.getVoices() || []).length; } catch (e) { return 0; }
+  }
 
   /**
    * Prefer a voice that lives on the device (localService), since the
@@ -5222,55 +5267,172 @@ const Speaker = (function () {
     synth.addEventListener('voiceschanged', pickVoice);
   }
 
+  function record(code) {
+    if (STICKY[code]) broken = code;
+  }
+
+  /**
+   * Anything that actually comes out of the speaker clears a failure
+   * verdict — including one already shown, so a slow engine that was
+   * written off can take the message back down with it.
+   */
+  function heard(wasReported) {
+    const stale = wasReported || broken;
+    broken = null;
+    if (stale && recoverHook) recoverHook();
+  }
+
+  /**
+   * Unlock the engine from inside a tap.
+   *
+   * Chrome for Android answers speak() with error 'not-allowed' when no
+   * user gesture is behind it, and a session's first real line arrives
+   * long after the tap that started it — behind the microphone prompt and
+   * the recogniser's setup. A silent utterance goes out on the tap itself,
+   * while the gesture still counts, which both unlocks the engine and
+   * gives the earliest read on whether this device can speak at all.
+   */
+  function prime() {
+    if (!supported()) return;
+    try {
+      const u = new Utterance(' ');
+      u.volume  = 0;
+      u.onstart = function () { primeCode = null; heard(false); };
+      u.onerror = function (e) { primeCode = (e && e.error) || 'synthesis-failed'; };
+      synth.speak(u);
+    } catch (e) {
+      primeCode = 'synthesis-failed';
+    }
+  }
+
+  /**
+   * Start a session with a clean slate: a verdict from last time should not
+   * outlive whatever the person went and fixed, and an utterance stuck in
+   * the queue would silently swallow everything queued behind it.
+   */
+  function reset() {
+    broken = null;
+    if (supported()) { try { synth.cancel(); } catch (e) { /* nothing queued */ } }
+  }
+
+  /** Called when speech starts working again after a failure was reported. */
+  function onRecover(fn) { recoverHook = fn; }
+
+  function ok()         { return { spoke: true,  code: null }; }
+  function fail(code)   { return { spoke: false, code: code }; }
+
+  /**
+   * Everything known about why this device is quiet, for the message the
+   * person actually reads.
+   */
+  function diagnose(code) {
+    return {
+      code:    code || broken || (supported() ? null : 'no-api'),
+      voices:  voiceCount(),
+      prime:   primeCode,
+      android: /android/i.test(navigator.userAgent || ''),
+    };
+  }
+
   /**
    * Long utterances get silently truncated by some engines, so text is
    * spoken a sentence at a time and the promise settles when the last
-   * chunk ends. Resolves (rather than rejects) on error so a wobbly voice
-   * engine can never wedge the session loop.
+   * chunk ends. It always resolves — a wobbly voice engine must never
+   * wedge the session loop — carrying { spoke, code } so the caller can
+   * say why nothing was heard.
    */
   function speak(text, opts) {
     const options = opts || {};
-    if (!supported() || !text) return Promise.resolve();
+    if (!text) return Promise.resolve(ok());
+    if (!supported()) return Promise.resolve(fail('no-api'));
+    if (broken) return Promise.resolve(fail(broken));
 
     const chunks = chunkForSpeech(String(text));
 
     return chunks.reduce(function (chain, chunk) {
-      return chain.then(function () {
-        return new Promise(function (resolve) {
-          const u = new SpeechSynthesisUtterance(chunk);
-          if (voice) u.voice = voice;
-          u.lang   = (voice && voice.lang) || 'en-US';
-          u.rate   = options.rate || 1;
-          u.pitch  = options.pitch || 1;
-          u.volume = 1;
-
-          let settled = false;
-          let watchdog = null;
-          const done = function () {
-            if (settled) return;
-            settled = true;
-            clearTimeout(watchdog);
-            resolve();
-          };
-          u.onend   = done;
-          u.onerror = done;
-
-          synth.speak(u);
-
-          // Some engines drop an utterance without firing either event —
-          // never fire onend, and the session loop waits on it forever.
-          // Roughly 15 characters a second, doubled, plus slack.
-          watchdog = setTimeout(done, (chunk.length / 15) * 2000 + 5000);
-        });
+      return chain.then(function (result) {
+        if (!result.spoke) return result; // stop at the first failure
+        return speakChunk(chunk, options);
       });
-    }, Promise.resolve());
+    }, Promise.resolve(ok()));
+  }
+
+  function speakChunk(chunk, options) {
+    return new Promise(function (resolve) {
+      const u = new Utterance(chunk);
+      if (voice) u.voice = voice;
+      u.lang   = (voice && voice.lang) || 'en-US';
+      u.rate   = options.rate || 1;
+      u.pitch  = options.pitch || 1;
+      u.volume = 1;
+
+      let settled  = false;
+      let started  = false;
+      let reported = false;
+      let watchdog = null;
+      let starter  = null;
+      const t0 = Date.now();
+
+      const done = function (code) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(watchdog);
+        clearTimeout(starter);
+        if (code) { reported = true; record(code); resolve(fail(code)); }
+        else { resolve(ok()); }
+      };
+
+      // A start is the only proof that sound came out. It can arrive after
+      // a slow engine has already been written off, which un-writes it off.
+      u.onstart = function () { started = true; heard(reported); };
+
+      // Some engines report an utterance finished the instant it is handed
+      // over, having spoken nothing — the second way a phone with no voice
+      // data goes quiet. No real sentence is read out in under a third of a
+      // second, so a start that never came and a duration that short is the
+      // engine admitting it, not an engine that merely skipped the event.
+      u.onend = function () {
+        done(!started && (Date.now() - t0) < 300 ? 'no-sound' : null);
+      };
+      u.onerror = function (e) {
+        const code = (e && e.error) || 'synthesis-failed';
+        // cancel() and the Stop button arrive as errors and say nothing
+        // about the engine.
+        done(code === 'interrupted' || code === 'canceled' ? null : code);
+      };
+
+      try {
+        synth.speak(u);
+      } catch (e) {
+        done('synthesis-failed');
+        return;
+      }
+
+      // Nothing at all by now means the utterance was dropped: no engine
+      // behind the API, or Chrome for Android refusing to speak without a
+      // tap. Either way it is something to report, not something to wait for.
+      starter = setTimeout(function () { if (!started) done('no-start'); }, START_MS);
+
+      // Some engines speak and then never fire onend, which would wedge the
+      // session loop. Roughly 15 characters a second, doubled, plus slack.
+      watchdog = setTimeout(function () { done(null); }, (chunk.length / 15) * 2000 + 5000);
+    });
   }
 
   function cancel() {
     if (supported()) synth.cancel();
   }
 
-  return { supported: supported, speak: speak, cancel: cancel };
+  return {
+    supported:  supported,
+    speak:      speak,
+    cancel:     cancel,
+    prime:      prime,
+    reset:      reset,
+    diagnose:   diagnose,
+    voiceCount: voiceCount,
+    onRecover:  onRecover,
+  };
 })();
 
 /**
@@ -5298,6 +5460,63 @@ function chunkForSpeech(text) {
   });
 
   return out.length ? out : [text];
+}
+
+/**
+ * Why nothing was read aloud, in terms of what to go and change.
+ *
+ * Pure, and kept apart from the engine, so the reasons can be tested and
+ * every caller says the same thing. The tail carries the raw code and the
+ * voice count: that is what turns "the audio doesn't work on my phone"
+ * into something anyone can act on.
+ */
+function speechFailureMessage(code, info) {
+  const facts  = info || {};
+  const voices = facts.voices || 0;
+
+  // Where the voices actually live. The Android path is spelled out,
+  // because Android is the device this goes wrong on.
+  const settings = facts.android
+    ? 'Settings → Accessibility → Text-to-speech output'
+    : 'your system speech settings';
+
+  // No voices at all is the whole answer: there is no engine behind the
+  // API, however the failure happened to surface.
+  const engineMissing = voices === 0 &&
+    (code === 'no-start' || code === 'no-sound' || code === 'no-voices' ||
+     code === 'synthesis-unavailable' || code === 'synthesis-failed');
+
+  let msg;
+
+  if (code === 'no-api') {
+    msg = 'This browser cannot read text aloud — it has no speech synthesis at all. Chrome, Edge or Safari can.';
+  } else if (engineMissing) {
+    msg = 'Nothing can be read aloud: this device has no text-to-speech voices installed. ' +
+          'Install a speech engine and its English voice data (' + settings + '), then start audio practice again.';
+  } else if (code === 'not-allowed') {
+    msg = (facts.android ? 'Your phone' : 'The browser') +
+          ' blocked the app from speaking because no tap started it. ' +
+          'Press ↻ Repeat to start the audio.';
+  } else if (code === 'no-start' || code === 'no-sound') {
+    msg = 'The text-to-speech engine did not speak. Press ↻ Repeat to try again' +
+          (facts.android ? ' — Chrome on Android only speaks when a tap starts it' : '') +
+          '. If it stays silent, check the volume and play a sample from ' + settings + '.';
+  } else if (code === 'language-unavailable' || code === 'voice-unavailable') {
+    msg = 'The text-to-speech engine has no English voice installed. ' +
+          'Add the English voice data from ' + settings + ' (the gear beside the engine → Install voice data).';
+  } else if (code === 'synthesis-unavailable' || code === 'synthesis-failed') {
+    msg = 'The device’s text-to-speech engine failed. Check it under ' + settings + ' and play a sample.';
+  } else if (code === 'audio-busy') {
+    msg = 'Another app is using the audio output. Stop what is playing, then press ↻ Repeat.';
+  } else if (code === 'audio-hardware') {
+    msg = 'No audio output is available — check headphones or Bluetooth, then press ↻ Repeat.';
+  } else {
+    msg = 'The text-to-speech engine could not read the text aloud.';
+  }
+
+  return msg + ' [' + (code || 'unknown') + ' · ' + voices +
+         ' voice' + (voices === 1 ? '' : 's') +
+         (facts.prime ? ' · unlock ' + facts.prime : '') + ']';
 }
 
 /**
@@ -5946,7 +6165,23 @@ const AudioPractice = (function () {
   function say(text, opts) {
     stopListening();
     setPhase('speaking');
-    return Speaker.speak(text, opts);
+    return Speaker.speak(text, opts).then(function (result) {
+      reportSpeech(result);
+      return result;
+    });
+  }
+
+  /**
+   * A phone that cannot speak used to look exactly like one that could:
+   * the session ran to the end in silence and never said why. Every line
+   * goes through say(), so this is the one place that has to notice.
+   *
+   * The session is not stopped over it — the question is on screen and
+   * answers are still graded — but the reason is now on screen too.
+   */
+  function reportSpeech(result) {
+    if (!result || result.spoke) return;
+    setNotice(speechFailureMessage(result.code, Speaker.diagnose(result.code)), 'error');
   }
 
   function askCurrent(opts) {
@@ -6022,8 +6257,15 @@ const AudioPractice = (function () {
     judge(best);
   }
 
-  function runCommand(id) {
+  function runCommand(id, viaTap) {
     const item = current();
+
+    // A tap is the one thing that gets a gesture-blocked engine speaking
+    // again, so the verdict against it is dropped before this one speaks.
+    if (viaTap) {
+      Speaker.reset();
+      setNotice('', null);
+    }
 
     if (id === 'repeat') {
       askCurrent({ repeat: true });
@@ -6163,7 +6405,7 @@ const AudioPractice = (function () {
     if (!exam) return;
 
     if (!Speaker.supported()) {
-      showConfirm('This browser cannot speak text aloud, so audio practice will not work here.', 'OK', function () {});
+      showConfirm(speechFailureMessage('no-api', Speaker.diagnose('no-api')), 'OK', function () {});
       return;
     }
 
@@ -6178,6 +6420,15 @@ const AudioPractice = (function () {
       showInlineNotice('Nothing to practise — pick some questions first.');
       return;
     }
+
+    // Still inside the tap that started the session. Chrome for Android
+    // refuses to speak unless a gesture is behind it, and the first spoken
+    // line comes after the microphone prompt and the recogniser setup, by
+    // which time this one no longer counts — so the engine is unlocked
+    // here, while it still does.
+    Speaker.reset();
+    Speaker.prime();
+    Speaker.onRecover(function () { setNotice('', null); });
 
     cursor = 0;
     tally  = { correct: 0, close: 0, wrong: 0 };
@@ -6293,6 +6544,7 @@ const AudioPractice = (function () {
   function exit() {
     BackStack.release('audio-practice');
     stopListening();
+    Speaker.onRecover(null);
     Speaker.cancel();
     releaseWakeLock();
     phase = 'idle';
@@ -6325,9 +6577,9 @@ $('btn-audio-done').addEventListener('click', function () { AudioPractice.exit()
 
 // On-screen twins of the voice commands — for a glance at a red light, and
 // as the way out if recognition is not cooperating.
-$('btn-audio-repeat').addEventListener('click', function () { AudioPractice.command('repeat'); });
-$('btn-audio-reveal').addEventListener('click', function () { AudioPractice.command('answer'); });
-$('btn-audio-next').addEventListener('click',   function () { AudioPractice.command('next'); });
+$('btn-audio-repeat').addEventListener('click', function () { AudioPractice.command('repeat', true); });
+$('btn-audio-reveal').addEventListener('click', function () { AudioPractice.command('answer', true); });
+$('btn-audio-next').addEventListener('click',   function () { AudioPractice.command('next',   true); });
 $('btn-audio-stop').addEventListener('click',   function () { AudioPractice.finish(); });
 
 // Exposed for quick checks from the console.
@@ -6396,7 +6648,20 @@ const VerseAudioPractice = (function () {
   function say(text) {
     stopListening();
     setPhase('speaking');
-    return Speaker.speak(text);
+    return Speaker.speak(text).then(function (result) {
+      reportSpeech(result);
+      return result;
+    });
+  }
+
+  /**
+   * Reading the verse aloud is the whole feature here, so a device that
+   * cannot speak has to say so rather than just sitting there. The verse
+   * stays on screen and the buttons still page through it.
+   */
+  function reportSpeech(result) {
+    if (!result || result.spoke) return;
+    setNotice(speechFailureMessage(result.code, Speaker.diagnose(result.code)), 'error');
   }
 
   function speakCurrent() {
@@ -6426,7 +6691,14 @@ const VerseAudioPractice = (function () {
     // Not a recognised command — the recogniser just keeps listening.
   }
 
-  function runCommand(id) {
+  function runCommand(id, viaTap) {
+    // A tap is the one thing that gets a gesture-blocked engine speaking
+    // again, so the verdict against it is dropped before this one speaks.
+    if (viaTap) {
+      Speaker.reset();
+      setNotice('', null);
+    }
+
     if (id === 'repeat') { speakCurrent(); return; }
     if (id === 'next') {
       if (index < items.length - 1) { index++; speakCurrent(); }
@@ -6481,13 +6753,20 @@ const VerseAudioPractice = (function () {
     if (active || !_verseEntry) return;
 
     if (!Speaker.supported()) {
-      showConfirm('This browser cannot speak text aloud, so audio practice will not work here.', 'OK', function () {});
+      showConfirm(speechFailureMessage('no-api', Speaker.diagnose('no-api')), 'OK', function () {});
       return;
     }
 
     items = normalizeVerseEntry(_verseEntry);
     if (!items.length) return;
     index = (_verseItemIndex >= 0 && _verseItemIndex < items.length) ? _verseItemIndex : 0;
+
+    // Still inside the tap: Chrome for Android refuses to speak without a
+    // gesture behind it, and the first verse is read out only after the
+    // microphone prompt and the recogniser setup have had their turn.
+    Speaker.reset();
+    Speaker.prime();
+    Speaker.onRecover(function () { setNotice('', null); });
 
     active = true;
     BackStack.push('verse-audio', exit);
@@ -6520,6 +6799,7 @@ const VerseAudioPractice = (function () {
     if (!active) return;
     BackStack.release('verse-audio');
     stopListening();
+    Speaker.onRecover(null);
     Speaker.cancel();
     releaseWakeLock();
     if (engine && engine.release) engine.release();
@@ -6556,9 +6836,9 @@ $('btn-verse-audio-selected').addEventListener('click', function () {
   VerseAudioPractice.toggle();
 });
 
-$('btn-verse-audio-repeat').addEventListener('click', function () { VerseAudioPractice.command('repeat'); });
-$('btn-verse-audio-prev').addEventListener('click',   function () { VerseAudioPractice.command('previous'); });
-$('btn-verse-audio-next').addEventListener('click',   function () { VerseAudioPractice.command('next'); });
+$('btn-verse-audio-repeat').addEventListener('click', function () { VerseAudioPractice.command('repeat',   true); });
+$('btn-verse-audio-prev').addEventListener('click',   function () { VerseAudioPractice.command('previous', true); });
+$('btn-verse-audio-next').addEventListener('click',   function () { VerseAudioPractice.command('next',     true); });
 $('btn-verse-audio-stop').addEventListener('click',   function () { VerseAudioPractice.exit(); });
 
 window.VerseAudioPractice = VerseAudioPractice;
