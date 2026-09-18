@@ -6481,12 +6481,361 @@ $('btn-verse-audio-stop').addEventListener('click',   function () { VerseAudioPr
 window.VerseAudioPractice = VerseAudioPractice;
 
 /* ═══════════════════════════════════════════════════════
+   BUG REPORT
+   ───────────────────────────────────────────────────────
+   Opens GitHub's "new issue" page with the report already
+   written, using nothing but issue URL parameters: no API
+   token, no credentials, no backend. The issue is never
+   submitted for the user — they read it over on GitHub and
+   press Create themselves.
+   ═══════════════════════════════════════════════════════ */
+
+const BUG_REPORT_REPO  = 'Ephaistophedes/ExamTrainer';
+const BUG_REPORT_LABEL = 'bug';
+
+// The app's own version. The build below it is the service worker's cache
+// version, which DEPLOY.md already has you bump on every release — that is
+// the number that says which code is actually running on the device.
+const APP_VERSION = '1.0.0';
+
+// GitHub answers a long enough request line with HTTP 414, so cap the URL
+// well short of the 8KB that servers typically stop accepting.
+const BUG_URL_MAX = 7500;
+
+/* ─── Diagnostics ───────────────────────────────────── */
+
+// Read from the live service worker cache; '' until we have an answer.
+let _buildVersion = '';
+
+/**
+ * Which release is actually running, read from the service worker cache name
+ * ('examtrainer-v25' → 'v25'). DEPLOY.md sends you to the same place when a
+ * change "doesn't appear", and it is the one version that cannot drift from
+ * what the device is really executing.
+ *
+ * Resolved ahead of the click, never during it: opening the browser has to
+ * happen inside the user gesture, and an await in between loses it. A blank
+ * answer is not remembered — on a first-ever visit the cache is still being
+ * written, and the next look will find it.
+ */
+function detectBuildVersion() {
+  if (_buildVersion) return Promise.resolve(_buildVersion);
+  if (!('caches' in window)) return Promise.resolve('');
+
+  return caches.keys().then(function (keys) {
+    const prefix = 'examtrainer-';
+    // activate() prunes every older cache, so in practice there is one.
+    const mine   = keys.filter(function (k) { return k.indexOf(prefix) === 0; });
+    _buildVersion = mine.length ? mine[0].slice(prefix.length) : '';
+    return _buildVersion;
+  }).catch(function () {
+    return '';
+  });
+}
+
+/** Read a diagnostic without letting it be the thing that breaks the report. */
+function probe(fn, fallback) {
+  try {
+    const value = fn();
+    return (value === null || value === undefined || value === '') ? fallback : value;
+  } catch {
+    return fallback;
+  }
+}
+
+function yesNo(value) {
+  return value ? 'yes' : 'no';
+}
+
+/**
+ * Facts about this install, as [label, value] rows.
+ *
+ * Deliberately narrow: version, browser, device and feature support, plus
+ * how much is in storage as a bare count. Never the contents of storage
+ * (exams, verses and attempt history are the user's own material), never a
+ * file path — a file:// pathname carries their home directory — and nothing
+ * that identifies the person or where they are.
+ */
+function collectDiagnostics() {
+  const nav    = window.navigator || {};
+  const uaData = nav.userAgentData;
+  const rows   = [];
+
+  function add(label, value) {
+    if (value !== null && value !== undefined && value !== '') {
+      rows.push([label, String(value)]);
+    }
+  }
+
+  add('App version', APP_VERSION);
+  add('Build', _buildVersion || 'unknown');
+
+  // Origin and path only, and only when it came off a server: a local
+  // file:// path would name the user's home directory, and the query and
+  // hash can carry anything.
+  add('App URL', probe(function () {
+    if (location.protocol !== 'https:' && location.protocol !== 'http:') {
+      return 'opened as a local file';
+    }
+    return location.origin + location.pathname;
+  }, 'unknown'));
+
+  add('Launch mode', probe(function () {
+    if (window.matchMedia('(display-mode: standalone)').matches) return 'installed app';
+    if (window.matchMedia('(display-mode: minimal-ui)').matches) return 'installed app (minimal-ui)';
+    return 'browser tab';
+  }, 'unknown'));
+
+  add('Browser', probe(function () {
+    return uaData.brands.map(function (b) { return b.brand + ' ' + b.version; }).join(', ');
+  }, ''));
+  add('User agent', probe(function () { return nav.userAgent; }, 'unknown'));
+  add('Platform', probe(function () { return uaData.platform; },
+                        probe(function () { return nav.platform; }, 'unknown')));
+  add('Mobile', probe(function () { return yesNo(uaData.mobile); }, ''));
+
+  add('Screen', probe(function () {
+    return screen.width + '×' + screen.height +
+           ' @ ' + (window.devicePixelRatio || 1) + '×';
+  }, 'unknown'));
+  add('Viewport', probe(function () {
+    return window.innerWidth + '×' + window.innerHeight;
+  }, 'unknown'));
+  add('Touch input', probe(function () {
+    return yesNo('ontouchstart' in window || nav.maxTouchPoints > 0);
+  }, 'unknown'));
+
+  add('Language', probe(function () { return nav.language; }, 'unknown'));
+  add('Online', probe(function () { return yesNo(nav.onLine); }, 'unknown'));
+
+  add('Service worker', probe(function () {
+    if (!('serviceWorker' in nav)) return 'not supported';
+    return nav.serviceWorker.controller ? 'controlling this page' : 'not controlling this page';
+  }, 'unknown'));
+
+  // Counts only. How much is stored is often the whole story for a
+  // rendering or performance bug; what is stored is the user's business.
+  add('Stored data', probe(function () {
+    const verses = loadVerses().length;
+    return pluralize(loadExams().length, 'exam') + ', ' +
+           verses + ' verse ' + (verses === 1 ? 'entry' : 'entries') + ', ' +
+           pluralize(loadHistory().length, 'attempt');
+  }, 'unknown'));
+
+  add('Speech synthesis', probe(function () {
+    return yesNo('speechSynthesis' in window);
+  }, 'unknown'));
+  add('Speech recognition', probe(function () {
+    return yesNo('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+  }, 'unknown'));
+  add('Offline voice model', probe(function () {
+    return localStorage.getItem(KEYS.voskModel) === 'ready' ? 'downloaded' : 'not downloaded';
+  }, 'unknown'));
+  add('Speech engine setting', probe(function () {
+    return localStorage.getItem(KEYS.sttEngine) || 'auto';
+  }, 'auto'));
+
+  return rows;
+}
+
+/* ─── Report body ───────────────────────────────────── */
+
+/** Keep a value from breaking out of its Markdown table cell. */
+function mdCell(value) {
+  return String(value).replace(/\|/g, '\\|').replace(/\s*[\r\n]+\s*/g, ' ');
+}
+
+/**
+ * The issue body, in GitHub Markdown. Sections the user left empty keep
+ * their heading and a prompt, so the shape of a good report survives even
+ * when it is filed in a hurry.
+ */
+function buildBugReportBody(fields, diagnostics) {
+  const lines = [];
+
+  function section(heading, text, placeholder) {
+    lines.push('## ' + heading, '', String(text || '').trim() || placeholder, '');
+  }
+
+  section('Bug description', fields.description, '_Not given._');
+  section('Steps to reproduce', fields.steps, '1. \n2. \n3. ');
+  section('Expected behaviour', fields.expected, '_Not given._');
+  section('Actual behaviour', fields.actual, '_Not given._');
+
+  lines.push('## Environment', '', '| Item | Value |', '| --- | --- |');
+  diagnostics.forEach(function (row) {
+    lines.push('| ' + mdCell(row[0]) + ' | ' + mdCell(row[1]) + ' |');
+  });
+  lines.push('');
+  lines.push('<sub>Collected by Exam Trainer when the report was written. No exam, ' +
+             'verse or history content is included.</sub>');
+
+  return lines.join('\n');
+}
+
+/* ─── Issue URL ─────────────────────────────────────── */
+
+/**
+ * GitHub's own prefill parameters. URL/URLSearchParams does the percent
+ * encoding, so a title or body full of #, & or newlines survives the trip.
+ */
+function buildBugReportUrl(shortTitle, body) {
+  const url = new URL('https://github.com/' + BUG_REPORT_REPO + '/issues/new');
+  url.searchParams.set('title', ('[Bug] ' + String(shortTitle || '').trim()).trim());
+  url.searchParams.set('labels', BUG_REPORT_LABEL);
+  url.searchParams.set('body', body);
+  return url.toString();
+}
+
+/**
+ * The same URL, trimmed until a server will accept it. Only the body can run
+ * away, and its tail is the environment table, so cutting from the end loses
+ * the least. Encoded length is not proportional to character count, so this
+ * steps down and re-measures rather than computing a cut.
+ */
+function capBugReportUrl(shortTitle, body) {
+  let url = buildBugReportUrl(shortTitle, body);
+  if (url.length <= BUG_URL_MAX) return url;
+
+  const notice = '\n\n_Report shortened so it would fit in a link — ' +
+                 'please add anything missing here._';
+  let text = body;
+
+  while (text.length > 0 && url.length > BUG_URL_MAX) {
+    const step = Math.max(32, Math.ceil((url.length - BUG_URL_MAX) / 3));
+    text = text.slice(0, Math.max(0, text.length - step));
+    url  = buildBugReportUrl(shortTitle, text + notice);
+  }
+
+  return url;
+}
+
+/**
+ * Hand the URL to the browser. Called straight out of the click handler:
+ * a popup blocker only lets this through while the user gesture is live.
+ *
+ * Returns false when the window did not open — blocked, or a webview with
+ * nowhere to send it — which is the caller's cue to offer the link instead.
+ */
+function openInBrowser(url) {
+  let win = null;
+  try {
+    // No 'noopener' feature here: browsers return null for it by spec, which
+    // would make every successful open look like a failure. Severing opener
+    // afterwards gets the same protection and keeps the answer readable.
+    win = window.open(url, '_blank');
+  } catch {
+    return false;
+  }
+  if (!win) return false;
+  try { win.opener = null; } catch {}
+  return true;
+}
+
+/* ─── Modal ─────────────────────────────────────────── */
+
+const BUG_FIELD_IDS = ['bug-summary', 'bug-description', 'bug-steps', 'bug-expected', 'bug-actual'];
+
+function readBugFields() {
+  return {
+    summary:     $('bug-summary').value,
+    description: $('bug-description').value,
+    steps:       $('bug-steps').value,
+    expected:    $('bug-expected').value,
+    actual:      $('bug-actual').value,
+  };
+}
+
+function renderBugDiagnostics() {
+  $('bug-diagnostics-preview').textContent = collectDiagnostics().map(function (row) {
+    return row[0] + ': ' + row[1];
+  }).join('\n');
+}
+
+function openBugModal() {
+  BUG_FIELD_IDS.forEach(function (id) { $(id).value = ''; });
+  hideBugFallback();
+
+  // Warmed at startup, but a first-launch race is possible — re-render once
+  // the build version lands so the preview is never short of it.
+  renderBugDiagnostics();
+  detectBuildVersion().then(function () {
+    if (!$('bug-modal').classList.contains('hidden')) renderBugDiagnostics();
+  });
+
+  BackStack.push('modal-bug', closeBugModal);
+  $('bug-modal').classList.remove('hidden');
+
+  // Same rule as the other modals: don't force the keyboard open on touch.
+  if (!('ontouchstart' in window)) $('bug-summary').focus();
+}
+
+function closeBugModal() {
+  BackStack.release('modal-bug');
+  $('bug-modal').classList.add('hidden');
+}
+
+function hideBugFallback() {
+  $('bug-fallback').classList.add('hidden');
+  $('btn-bug-copy').textContent = 'Copy link';
+}
+
+/** Last resort: show the link so the user can open or copy it by hand. */
+function showBugFallback(url) {
+  $('bug-fallback-link').href      = url;
+  $('btn-bug-copy').textContent    = 'Copy link';
+  $('bug-fallback').classList.remove('hidden');
+  // It appears at the foot of a scrolling body, so bring the whole panel up
+  // — the copy button included, not just the link.
+  $('bug-fallback').scrollIntoView({ block: 'end' });
+}
+
+$('btn-report-bug').addEventListener('click', openBugModal);
+$('bug-close').addEventListener('click', closeBugModal);
+$('btn-bug-cancel').addEventListener('click', closeBugModal);
+$('bug-backdrop').addEventListener('click', closeBugModal);
+
+$('btn-bug-open').addEventListener('click', function () {
+  const fields = readBugFields();
+  const url    = capBugReportUrl(fields.summary,
+                                 buildBugReportBody(fields, collectDiagnostics()));
+
+  if (openInBrowser(url)) {
+    closeBugModal();
+    return;
+  }
+  showBugFallback(url);
+});
+
+$('btn-bug-copy').addEventListener('click', function () {
+  const btn = $('btn-bug-copy');
+
+  // The clipboard is missing on older browsers and refused without a secure
+  // context or permission, so say what to do by hand rather than nothing.
+  function cannotCopy() { btn.textContent = 'Press and hold the link to copy'; }
+
+  let copying;
+  try {
+    copying = navigator.clipboard.writeText($('bug-fallback-link').href);
+  } catch {
+    cannotCopy();
+    return;
+  }
+
+  copying.then(function () { btn.textContent = 'Copied'; }).catch(cannotCopy);
+});
+
+/* ═══════════════════════════════════════════════════════
    INITIALISE
    ═══════════════════════════════════════════════════════ */
 
 renderExamList();
 renderTrainer();
 renderVerseList();
+
+// Resolve the running build now so a bug report can be assembled inside the
+// click that opens the browser, with no async gap for a popup blocker.
+detectBuildVersion();
 
 /* ─── Service worker (offline + auto-update) ─────────── */
 // Only register over HTTPS or localhost; file:// has no SW support.

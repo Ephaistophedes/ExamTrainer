@@ -61,6 +61,11 @@ older releases are purged:
 An online device picks the update up on its **next launch**. No manual reinstall
 needed on the phone.
 
+> The cache version doubles as the app's build number: bug reports read it back
+> out of the live cache, so the version on an issue is always the code that was
+> actually running. `APP_VERSION` in [`app.js`](app.js) is the separate, human
+> release number — bump it when the app changes shape, not on every deploy.
+
 > Third-party assets (Google Fonts) stay stale-while-revalidate — they never
 > change under us, so they should not hold up a launch.
 

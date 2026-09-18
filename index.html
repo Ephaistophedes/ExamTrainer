@@ -26,7 +26,25 @@
 
   <header>
     <h1>Exam Trainer</h1>
-    <button id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
+    <div class="header-actions">
+      <button id="btn-report-bug" aria-label="Report a bug" title="Report a bug">
+        <svg class="icon-bug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+          <path d="m8 2 1.88 1.88"/>
+          <path d="M14.12 3.88 16 2"/>
+          <path d="M9 7.13v-1a3 3 0 0 1 6 0v1"/>
+          <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6Z"/>
+          <path d="M12 20v-9"/>
+          <path d="M6.53 9C4.6 8.8 3 7.1 3 5"/>
+          <path d="M6 13H2"/>
+          <path d="M3 21c0-2.1 1.7-3.9 3.8-4"/>
+          <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/>
+          <path d="M22 13h-4"/>
+          <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/>
+        </svg>
+      </button>
+      <button id="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
+    </div>
   </header>
 
   <nav class="tab-nav" role="tablist">
@@ -618,6 +636,72 @@
       <div class="modal-footer">
         <button id="btn-confirm-yes" class="btn btn-danger">Delete</button>
         <button id="btn-confirm-no" class="btn btn-ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Bug Report Modal ────────────────────────────── -->
+  <div id="bug-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="bug-modal-title">
+    <div class="modal-backdrop" id="bug-backdrop"></div>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="bug-modal-title">Report a Bug</h2>
+        <button id="bug-close" class="btn-icon" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <p class="bug-intro">
+          This opens a pre-filled issue on GitHub in your browser. Nothing is sent
+          until you have read it over and pressed <strong>Create</strong> there.
+        </p>
+
+        <div class="form-group">
+          <label for="bug-summary">Short title</label>
+          <input type="text" id="bug-summary" class="input" maxlength="120" autocomplete="off"
+                 placeholder="e.g. Verse trainer skips the last line">
+        </div>
+
+        <div class="form-group">
+          <label for="bug-description">What went wrong?</label>
+          <textarea id="bug-description" class="input bug-textarea" rows="3"
+                    placeholder="A short description of the bug."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="bug-steps">Steps to reproduce</label>
+          <textarea id="bug-steps" class="input bug-textarea" rows="4"
+                    placeholder="1. Open the Verses tab&#10;2. Start a practice session&#10;3. …"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="bug-expected">Expected behaviour</label>
+          <textarea id="bug-expected" class="input bug-textarea" rows="2"
+                    placeholder="What you expected to happen."></textarea>
+        </div>
+
+        <div class="form-group">
+          <label for="bug-actual">Actual behaviour</label>
+          <textarea id="bug-actual" class="input bug-textarea" rows="2"
+                    placeholder="What happened instead."></textarea>
+        </div>
+
+        <details class="bug-diagnostics">
+          <summary>Diagnostics attached to the report</summary>
+          <pre id="bug-diagnostics-preview" class="bug-diagnostics-pre"></pre>
+          <p class="bug-diagnostics-note">
+            Version, browser and device details only — no exam, verse or history
+            content, and nothing that identifies you.
+          </p>
+        </details>
+
+        <div id="bug-fallback" class="alert alert-error hidden" role="alert">
+          <p class="bug-fallback-text">Your browser would not open a new tab. Use this link to finish the report:</p>
+          <a id="bug-fallback-link" class="bug-fallback-link" href="#" target="_blank" rel="noopener noreferrer">Open the pre-filled issue on GitHub</a>
+          <button id="btn-bug-copy" class="btn btn-secondary">Copy link</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-bug-open" class="btn btn-primary">Open on GitHub</button>
+        <button id="btn-bug-cancel" class="btn btn-ghost">Cancel</button>
       </div>
     </div>
   </div>

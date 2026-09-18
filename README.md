@@ -15,6 +15,9 @@ between devices.
   <kbd>Shift</kbd>+<kbd>←</kbd>/<kbd>→</kbd> lower/raise the difficulty.
 - **Installable PWA** — add to your home screen on Android/desktop and use it fully
   offline (with one caveat for audio practice, below).
+- **Report a bug** — the bug button in the header writes up the report, attaches
+  version/browser/device details, and opens it as a pre-filled GitHub issue for you
+  to read over and submit. Nothing leaves the device until you press Create.
 
 ## Running locally
 

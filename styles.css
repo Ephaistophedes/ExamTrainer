@@ -124,7 +124,14 @@ header h1 {
   flex: 1;
 }
 
-#theme-toggle {
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#theme-toggle,
+#btn-report-bug {
   background: none;
   border: 1px solid var(--border-dark);
   border-radius: var(--radius-sm);
@@ -135,9 +142,25 @@ header h1 {
   transition: background var(--transition), color var(--transition), border-color var(--transition);
 }
 
-#theme-toggle:hover {
+#theme-toggle:hover,
+#btn-report-bug:hover {
   background: var(--surface);
   color: var(--text);
+}
+
+/* The toggle is an emoji and the bug an inline SVG, so match them on the
+   drawn glyph rather than on the box. */
+#btn-report-bug {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.55rem;
+}
+
+.icon-bug {
+  width: 1.1rem;
+  height: 1.1rem;
+  display: block;
 }
 
 /* ─── Tab Navigation ────────────────────────────────── */
@@ -1500,6 +1523,72 @@ main {
   margin-top: 0.1rem;
 }
 
+/* ─── Bug Report Modal ──────────────────────────────── */
+
+.bug-intro {
+  margin-bottom: 1.25rem;
+}
+
+.bug-textarea {
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.6;
+}
+
+.bug-diagnostics {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.6rem 0.75rem;
+}
+
+.bug-diagnostics summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.bug-diagnostics summary:hover {
+  color: var(--text);
+}
+
+/* Long values (a user agent string above all) wrap instead of forcing the
+   panel wide enough to scroll sideways. */
+.bug-diagnostics-pre {
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.bug-diagnostics-note {
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+  color: var(--text-subtle);
+  line-height: 1.5;
+}
+
+#bug-fallback {
+  margin: 1.25rem 0 0;
+}
+
+.bug-fallback-text {
+  margin-bottom: 0.6rem;
+}
+
+.bug-fallback-link {
+  display: block;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  margin-bottom: 0.6rem;
+}
+
 /* ═══════════════════════════════════════════════════════
    EXAM EDITOR
    ═══════════════════════════════════════════════════════ */
@@ -1964,7 +2053,8 @@ main {
 
   header h1 { font-size: 1.2rem; }
 
-  #theme-toggle {
+  #theme-toggle,
+  #btn-report-bug {
     min-width: 44px;
     min-height: 44px;
     padding: 0.5rem 0.6rem;
