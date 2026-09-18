@@ -88,12 +88,6 @@ const KEYS = {
   sttEngine:    'audioSttEngine',
 };
 
-// Listeners notified whenever persisted app data changes (used by Drive sync).
-const _stateListeners = [];
-function emitStateChange() {
-  _stateListeners.forEach(function (fn) { try { fn(); } catch (e) { /* ignore */ } });
-}
-
 function loadJSON(key, fallback) {
   try {
     const val = JSON.parse(localStorage.getItem(key));
@@ -113,7 +107,6 @@ function loadExams() {
 
 function saveExams(exams) {
   saveJSON(KEYS.examBank, exams);
-  emitStateChange();
 }
 
 // Folders group a list into collapsible sections. Membership lives on the
@@ -125,7 +118,6 @@ function loadExamFolders() {
 
 function saveExamFolders(folders) {
   saveJSON(KEYS.examFolders, folders);
-  emitStateChange();
 }
 
 function loadVerseFolders() {
@@ -134,7 +126,6 @@ function loadVerseFolders() {
 
 function saveVerseFolders(folders) {
   saveJSON(KEYS.verseFolders, folders);
-  emitStateChange();
 }
 
 function loadHistory() {
@@ -143,7 +134,6 @@ function loadHistory() {
 
 function saveHistory(history) {
   saveJSON(KEYS.examHistory, history);
-  emitStateChange();
 }
 
 function getActiveExamId() {
@@ -152,7 +142,6 @@ function getActiveExamId() {
 
 function setActiveExamId(id) {
   localStorage.setItem(KEYS.activeExam, id);
-  emitStateChange();
 }
 
 function loadDraft() {
@@ -172,77 +161,6 @@ function getActiveExam() {
   if (!id) return null;
   return loadExams().find(function (e) { return e.id === id; }) || null;
 }
-
-/* ─── Full app-state snapshot (for Drive sync / backup) ── */
-
-const BACKUP_FORMAT = 1;
-
-/** Serialise everything persisted locally into one backup object. */
-function exportAppState() {
-  return {
-    _app: 'ExamTrainer',
-    _format: BACKUP_FORMAT,
-    exportedAt: new Date().toISOString(),
-    data: {
-      examBank:    loadExams(),
-      examFolders: loadExamFolders(),
-      examHistory: loadHistory(),
-      verseBank:   loadVerses(),
-      verseFolders: loadVerseFolders(),
-      activeExamId: getActiveExamId(),
-    },
-  };
-}
-
-/**
- * Restore a backup object produced by exportAppState().
- * Replaces local state wholesale (this file is the source of truth).
- * Returns { ok, error }.
- */
-function importAppState(backup) {
-  if (!backup || typeof backup !== 'object' || !backup.data || typeof backup.data !== 'object') {
-    return { ok: false, error: 'Not a valid Exam Trainer backup file.' };
-  }
-  const d = backup.data;
-  if (!Array.isArray(d.examBank)) {
-    return { ok: false, error: 'Backup is missing the exam list.' };
-  }
-
-  // Write through the normal storage layer so listeners fire as expected.
-  saveExams(d.examBank);
-  // Backups predating folders have no list; their items restore as ungrouped.
-  saveExamFolders(Array.isArray(d.examFolders) ? d.examFolders : []);
-  saveHistory(Array.isArray(d.examHistory) ? d.examHistory : []);
-  saveVerses(Array.isArray(d.verseBank) ? d.verseBank : []);
-  saveVerseFolders(Array.isArray(d.verseFolders) ? d.verseFolders : []);
-  if (d.activeExamId && d.examBank.some(function (e) { return e.id === d.activeExamId; })) {
-    setActiveExamId(d.activeExamId);
-  } else {
-    localStorage.removeItem(KEYS.activeExam);
-  }
-
-  // Refresh whatever is on screen.
-  refreshAllViews();
-  return { ok: true };
-}
-
-/** Re-render the currently visible tab after a bulk state change. */
-function refreshAllViews() {
-  try { renderExamList(); } catch (e) {}
-  try { renderTrainer(); } catch (e) {}
-  try { renderVerseList(); } catch (e) {}
-  const histTab = document.getElementById('tab-history');
-  if (histTab && histTab.classList.contains('active')) {
-    try { renderHistory(); } catch (e) {}
-  }
-}
-
-// Public surface consumed by drive-sync.js (loaded after this file).
-window.ExamTrainerState = {
-  export: exportAppState,
-  import: importAppState,
-  onChange: function (fn) { if (typeof fn === 'function') _stateListeners.push(fn); },
-};
 
 /* ─── ID Generators ─────────────────────────────────── */
 
@@ -3289,12 +3207,11 @@ function loadVerses() {
 
 function saveVerses(verses) {
   saveJSON(KEYS.verseBank, verses);
-  emitStateChange();
 }
 
 // Remembers which items within a multi-verse entry were last selected for
 // practice, keyed by verse entry id, so reopening the picker doesn't force
-// re-selecting every time. Local-only (not part of the Drive sync backup).
+// re-selecting every time. Local-only.
 function loadVerseSelections() {
   return loadJSON(KEYS.verseSelection, {});
 }

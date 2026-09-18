@@ -9,7 +9,7 @@
        old caches are cleaned up and clients pick up changes.
    ═══════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v23';
+const CACHE_VERSION = 'v24';
 const CACHE_NAME = 'examtrainer-' + CACHE_VERSION;
 
 // Same-origin app shell. Relative paths keep this working under the
@@ -20,7 +20,6 @@ const APP_SHELL = [
   './styles.css',
   './app.js',
   './config.js',
-  './drive-sync.js',
   './manifest.json',
   './icon.svg',
   './icon-192.png',
@@ -30,14 +29,6 @@ const APP_SHELL = [
   // well be underground. vosk.js itself (5.8MB) is deliberately not here:
   // it is fetched lazily and warmed when the model is downloaded.
   './vendor/vosk/mic-worklet.js',
-];
-
-// Hosts whose responses must never be cached (auth + live Drive data).
-const NO_CACHE_HOSTS = [
-  'accounts.google.com',
-  'oauth2.googleapis.com',
-  'www.googleapis.com',
-  'content.googleapis.com',
 ];
 
 self.addEventListener('install', function (event) {
@@ -73,9 +64,6 @@ self.addEventListener('fetch', function (event) {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
-
-  // Never intercept Google auth / Drive API traffic.
-  if (NO_CACHE_HOSTS.indexOf(url.hostname) !== -1) return;
 
   // Our own code and markup go network-first. Serving them from cache first
   // means a launch always runs the *previous* release and only picks up the

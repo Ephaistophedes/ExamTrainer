@@ -17,9 +17,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css">
-  <!-- Optional Google Drive sync libraries (no-op until configured in config.js) -->
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
-  <script src="https://apis.google.com/js/api.js" async defer></script>
   <script>
     if (localStorage.getItem('theme') === 'dark')
       document.documentElement.setAttribute('data-theme', 'dark');
@@ -49,7 +46,6 @@
         <div class="exams-actions">
           <button id="btn-import" class="btn btn-secondary">Import JSON</button>
           <button id="btn-export" class="btn btn-secondary">Export</button>
-          <button id="btn-drive" class="btn btn-secondary" title="Sync with Google Drive">☁ Drive</button>
           <button id="btn-create-folder" class="btn btn-secondary">+ Create Folder</button>
           <button id="btn-create" class="btn btn-primary">+ Create New Exam</button>
         </div>
@@ -571,45 +567,6 @@
     </div>
   </div>
 
-  <!-- ─── Google Drive Sync Modal ────────────────────── -->
-  <div id="drive-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="drive-title">
-    <div class="modal-backdrop" id="drive-backdrop"></div>
-    <div class="modal-panel modal-panel-sm">
-      <div class="modal-header">
-        <h2 id="drive-title">Google Drive Sync</h2>
-        <button id="drive-close" class="btn-icon" aria-label="Close">&#x2715;</button>
-      </div>
-      <div class="modal-body">
-        <p class="drive-intro">
-          Back up <strong>all</strong> your exams, attempt history and verses to a single file in
-          your Google Drive, and restore them on any device. Manual JSON import/export still works
-          offline.
-        </p>
-
-        <div class="drive-file-row">
-          <div class="drive-file-info">
-            <span class="drive-file-label">Linked file</span>
-            <span id="drive-file-name" class="drive-file-name">No file linked</span>
-            <span id="drive-sync-state" class="drive-sync-state"></span>
-          </div>
-        </div>
-
-        <div id="drive-status" class="drive-status" role="status" aria-live="polite"></div>
-
-        <div class="drive-actions">
-          <button id="btn-drive-signin" class="btn btn-secondary">Sign in to Google</button>
-          <button id="btn-drive-backup" class="btn btn-primary">Back up to Drive</button>
-          <button id="btn-drive-restore" class="btn btn-primary">Restore from Drive</button>
-          <button id="btn-drive-choose" class="btn btn-ghost">Choose a different file…</button>
-          <button id="btn-drive-unlink" class="btn btn-ghost">Unlink file</button>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button id="btn-drive-cancel" class="btn btn-ghost">Close</button>
-      </div>
-    </div>
-  </div>
-
   <!-- ─── Folder Name Modal (create + rename) ─────────── -->
   <div id="folder-name-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="folder-name-title">
     <div class="modal-backdrop" id="folder-name-backdrop"></div>
@@ -667,6 +624,5 @@
 
   <script src="./app.js" defer></script>
   <script src="./config.js" defer></script>
-  <script src="./drive-sync.js" defer></script>
 </body>
 </html>
