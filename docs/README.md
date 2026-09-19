@@ -103,9 +103,11 @@ four levels that take the text away a piece at a time.
 
 Exams, Trainer and History all turn on **one active exam** at a time: the Exams tab
 picks it, the Trainer practises it, History reports on it. Verses is its own world and
-ignores all that. Above the tabs sit a 🐛 button
-([bug reports](#when-something-goes-wrong)) and a 🌙/☀️ toggle — dark mode is a real
-theme, not an inverted screen, and every view has one.
+ignores all that.
+
+Three small controls sit above the tabs: the **book** opens this guide, the **bug**
+files a [bug report](#when-something-goes-wrong), and the **moon** switches to dark
+mode — which is a real theme, not an inverted screen, and covers every view.
 
 <table>
   <tr>
@@ -518,7 +520,7 @@ sheet or session first, and only leaves the app when there is nothing left to cl
   <img src="screenshots/bug-report.png" width="250" alt="The bug report dialog">
 </p>
 
-The 🐛 button in the header writes the report for you: a title, what happened, the
+The bug button in the header writes the report for you: a title, what happened, the
 steps, and what you expected. It attaches the running build, the browser and the
 device — which you can read before you send, under *Diagnostics attached to the
 report* — and then opens GitHub's new-issue page with all of it filled in.
@@ -563,5 +565,6 @@ attached to it.
 ---
 
 <p align="center">
-  <sub>Built as a personal study tool. Bugs and ideas: the 🐛 button, or the repository's issues.</sub>
+  <sub>Built as a personal study tool. The book button in the app brings you back to this page.<br>
+  Bugs and ideas: the bug button next to it, or the repository's issues.</sub>
 </p>
