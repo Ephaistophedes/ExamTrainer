@@ -7,7 +7,8 @@ between devices.
 
 > 📖 **[The guide](docs/)** — what every screen does, what the app is for, and why it
 > works the way it does, with screenshots from a phone. Start there if you are using
-> the app rather than working on it. The rest of this file is the developer side.
+> the app rather than working on it; the book button in the app header links straight
+> to it. The rest of this file is the developer side.
 
 - **Exams** — import/create question banks, practise full / weak-areas / custom sets,
   self-mark, and track attempt history.
