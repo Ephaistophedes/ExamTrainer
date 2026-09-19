@@ -11,4 +11,5 @@
 # we want, since vendor/vosk/ ships with the app.
 
 exclude:
-  - tests/   # Node test suite; run locally with `node tests/run.js`
+  - tests/       # Node test suite; run locally with `node tests/run.js`
+  - docs/tools/  # Screenshot harness for the guide; needs Playwright, never shipped
