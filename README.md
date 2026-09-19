@@ -5,6 +5,10 @@ verses. Pure static site — no backend, no build step. Your data lives in the
 browser (`localStorage`), with JSON import/export for backups and for moving
 between devices.
 
+> 📖 **[The guide](docs/)** — what every screen does, what the app is for, and why it
+> works the way it does, with screenshots from a phone. Start there if you are using
+> the app rather than working on it. The rest of this file is the developer side.
+
 - **Exams** — import/create question banks, practise full / weak-areas / custom sets,
   self-mark, and track attempt history.
 - **Audio practice** — a hands-free voice session for the commute: the app reads each
@@ -46,6 +50,26 @@ renamed the harness fails loudly instead of quietly testing nothing.
 **Development only — it is not part of the app.** Nothing loads `tests/` at runtime,
 the service worker never caches it, and [`_config.yml`](_config.yml) keeps GitHub
 Pages from publishing it.
+
+## Documentation
+
+The user-facing guide is **[`docs/`](docs/)**, illustrated with phone screenshots in
+[`docs/screenshots/`](docs/screenshots). Those are generated, not taken by hand — the
+harness serves the repo, seeds a phone-sized Chromium from the real `Data/*.json`
+files, and drives the shipping UI, so a screenshot can only ever show what the app
+actually does:
+
+```bash
+npm i -g playwright && playwright install chromium
+node docs/tools/screenshots.js                    # all of them
+node docs/tools/screenshots.js verse-level2 hero  # or just these
+```
+
+Re-run it after a change to the look of a screen, and check the guide still describes
+what the picture shows. The committed PNGs are palette-compressed afterwards
+(`pngquant --force --ext .png --quality 70-95 docs/screenshots/*.png`), which is
+optional and only affects their size. Like `tests/`, `docs/tools/` is development-only
+and kept out of the published site.
 
 ## Deployment
 
