@@ -3244,6 +3244,12 @@ main {
   padding-bottom: 1rem;
 }
 
+/* Stop gets a visible outline so its edges are obvious and a near-miss on
+   Repeat above it doesn't land on an invisible full-width hit area. */
+.audio-controls .btn-danger-ghost {
+  border-color: var(--error-border);
+}
+
 .audio-summary {
   display: flex;
   flex-direction: column;
@@ -3301,4 +3307,6 @@ main {
 
   .audio-question { font-size: 1.1rem; }
   .audio-controls .btn { flex: 1; min-width: 6.5rem; min-height: 44px; }
+  /* Stop keeps its natural size instead of stretching across a wrapped row. */
+  .audio-controls .btn-danger-ghost { flex: 0 0 auto; min-width: 6.5rem; margin-top: 0.5rem; }
 }
