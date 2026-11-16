@@ -1775,6 +1775,7 @@ let examSubmitted      = false;
 let customSelectedIds  = new Set();
 let weakPartsOnly      = false;   // weak mode: drill only previously-missed sub-parts
 let activeParts        = {};      // qid -> [original part indices] to practise this session
+let questionNumbers    = {};      // qid -> its 1-based number in the full exam
 
 // Self-mark state
 let selfMarkResults       = {};
@@ -1858,6 +1859,9 @@ function startTrainer() {
 
   const exam = getActiveExam();
   if (!exam) return;
+
+  questionNumbers = {};
+  exam.questions.forEach(function (q, i) { questionNumbers[q.id] = i + 1; });
 
   if (trainerMode === 'weak') {
     currentQuestions = getWeakQuestions(exam);
@@ -2054,15 +2058,10 @@ function clearInlineNotice() {
 
 /* ─── Render question cards ─────────────────────────── */
 
+// A question keeps its number from the full exam, so a custom pick of 20–29
+// or a weak-spots session still shows "Question 23", not "Question 4".
 function questionDisplayNum(q, fallbackIdx) {
-  if (trainerMode === 'weak') {
-    const exam = getActiveExam();
-    if (exam) {
-      const idx = exam.questions.findIndex(function (eq) { return eq.id === q.id; });
-      if (idx >= 0) return idx + 1;
-    }
-  }
-  return fallbackIdx + 1;
+  return questionNumbers[q.id] || fallbackIdx + 1;
 }
 
 // A blank written as a run of underscores, optionally hugged by punctuation
@@ -2140,7 +2139,7 @@ function renderQuestions(questions) {
               ' placeholder="___"' +
               ' autocomplete="off"' +
               ' spellcheck="false"' +
-              ' aria-label="Blank ' + (t.part + 1) + ' for question ' + (i + 1) + '"' +
+              ' aria-label="Blank ' + (t.part + 1) + ' for question ' + questionDisplayNum(q, i) + '"' +
             '>' +
             esc(t.after) +
           '</span>'
@@ -2177,7 +2176,7 @@ function renderQuestions(questions) {
               ' placeholder="Your answer…"' +
               ' autocomplete="off"' +
               ' spellcheck="false"' +
-              ' aria-label="Answer ' + (pi + 1) + ' for question ' + (i + 1) + '"' +
+              ' aria-label="Answer ' + (pi + 1) + ' for question ' + questionDisplayNum(q, i) + '"' +
             '>' +
           '</div>' +
           '<div class="answer-part-feedback" id="fb-' + q.id + '-' + pi + '"></div>'
@@ -6065,7 +6064,7 @@ const AudioPractice = (function () {
       parts.forEach(function (pi, n) {
         items.push({
           q:              q,
-          questionNumber: qi + 1,
+          questionNumber: questionDisplayNum(q, qi),
           partNumber:     n + 1,
           partsTotal:     parts.length,
           correct:        q.correct[pi],
