@@ -3250,6 +3250,13 @@ main {
   border-color: var(--error-border);
 }
 
+/* Answer is the one you reach for every part, so it gets a row to itself. */
+.audio-controls .btn.audio-answer-btn {
+  flex: 1 1 100%;
+  min-height: 52px;
+  font-size: 1.05rem;
+}
+
 .audio-summary {
   display: flex;
   flex-direction: column;
