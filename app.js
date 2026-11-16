@@ -5198,6 +5198,7 @@ function matchCommand(text) {
 const Speaker = (function () {
   const synth = window.speechSynthesis;
   let voice   = null;
+  let generation = 0; // bumped by cancel(), so a cancelled speak() stops between sentences
 
   function supported() { return !!synth; }
 
@@ -5233,9 +5234,13 @@ const Speaker = (function () {
     if (!supported() || !text) return Promise.resolve();
 
     const chunks = chunkForSpeech(String(text));
+    const gen    = generation;
 
     return chunks.reduce(function (chain, chunk) {
       return chain.then(function () {
+        // cancel() ends only the sentence being spoken; without this check
+        // the rest of a cancelled question would carry on reading.
+        if (gen !== generation) return;
         return new Promise(function (resolve) {
           const u = new SpeechSynthesisUtterance(chunk);
           if (voice) u.voice = voice;
@@ -5267,6 +5272,7 @@ const Speaker = (function () {
   }
 
   function cancel() {
+    generation++;
     if (supported()) synth.cancel();
   }
 
@@ -5879,14 +5885,18 @@ function ensureMicPermission() {
 }
 
 const AudioPractice = (function () {
-  let engine    = null;
+  let engine    = null;   // null = no voice commands on this device; the buttons drive it
   let queue     = [];     // one entry per answer part, in asking order
   let cursor    = 0;
-  let phase     = 'idle'; // idle | speaking | listening | judging | done
-  let tally     = { correct: 0, close: 0, wrong: 0 };
+  let phase     = 'idle'; // idle | speaking | listening | waiting | done
+  let running   = false;  // true once the session has started reading questions
+  let session   = 0;      // bumped on start/exit, so a stale permission prompt can't revive one
+  let revealed  = 0;      // answers read out this session
+  let shown     = [];     // answers read out for the current question, for the screen
   let wakeLock  = null;
   let nudged    = false;
   let silenceTimer = null;
+  let speechToken  = 0;   // bumped by every say(), so a superseded one never carries on
 
   /* — view helpers — */
 
@@ -5899,8 +5909,8 @@ const AudioPractice = (function () {
     orb.className = 'audio-orb audio-orb-' + next;
     label.textContent =
       next === 'speaking'  ? 'Speaking…'  :
-      next === 'listening' ? 'Listening…' :
-      next === 'judging'   ? 'Checking…'  :
+      next === 'listening' ? 'Listening… say “answer”' :
+      next === 'waiting'   ? 'Tap Answer when you’re ready' :
       next === 'done'      ? 'Finished'   : '';
   }
 
@@ -5916,66 +5926,117 @@ const AudioPractice = (function () {
     el.classList.toggle('hidden', !text);
   }
 
-  function setVerdict(kind, text) {
+  /** The answers read out so far for this question, one line per part. */
+  function renderShown() {
     const el = $('audio-verdict');
-    el.textContent = text || '';
-    el.className = 'audio-verdict' + (text ? '' : ' hidden') + (kind ? ' audio-verdict-' + kind : '');
+    el.innerHTML = '';
+    shown.forEach(function (line) {
+      const row = document.createElement('div');
+      row.textContent = line;
+      el.appendChild(row);
+    });
+    el.className = 'audio-verdict audio-verdict-revealed' + (shown.length ? '' : ' hidden');
   }
 
   function current() { return queue[cursor] || null; }
+
+  function questionCount() {
+    return queue.length ? queue[queue.length - 1].questionNumber : 0;
+  }
 
   function render() {
     const item = current();
     if (!item) return;
 
-    $('audio-progress').textContent = (cursor + 1) + ' / ' + queue.length;
+    $('audio-progress').textContent = item.questionNumber + ' / ' + questionCount();
     $('audio-question').textContent = speakableQuestion(item.q.question);
 
     const part = $('audio-part');
     if (item.partsTotal > 1) {
-      part.textContent = 'Part ' + (item.partNumber) + ' of ' + item.partsTotal;
+      part.textContent = 'Part ' + item.partNumber + ' of ' + item.partsTotal;
       part.classList.remove('hidden');
     } else {
       part.classList.add('hidden');
     }
+
+    $('btn-audio-reveal').textContent = item.partsTotal > 1
+      ? 'Answer part ' + item.partNumber
+      : 'Answer';
+    renderShown();
   }
 
   /* — the loop — */
 
-  /** Speak, with the microphone closed so the app never hears itself. */
-  function say(text, opts) {
+  /**
+   * Speak, with the microphone closed so the app never hears itself.
+   * Anything still being said is cut off — a button press mid-question
+   * acts at once. Resolves true only if nothing has superseded it since.
+   */
+  function say(text) {
     stopListening();
+    Speaker.cancel();
+    const token = ++speechToken;
     setPhase('speaking');
-    return Speaker.speak(text, opts);
+    return Speaker.speak(text).then(function () {
+      return token === speechToken && phase === 'speaking';
+    });
   }
 
+  function thenWait(stillCurrent) {
+    if (stillCurrent) awaitCommand();
+  }
+
+  /**
+   * Read the current part's question, then wait for "answer". Part 1 reads
+   * the whole question; later parts just announce themselves, since the
+   * question has already been heard.
+   */
   function askCurrent(opts) {
     const item = current();
-    if (!item) return finish();
+    if (!item) return finish(true);
 
     const options = opts || {};
+    if (item.partNumber === 1 && !options.repeat) shown = [];
     render();
-    setVerdict(null, '');
     setHeard('');
 
-    let intro = '';
-    if (!options.repeat) {
-      intro = item.partNumber === 1
-        ? 'Question ' + (item.questionNumber) + '. '
-        : '';
-    }
-    const partTag = item.partsTotal > 1 ? ' Part ' + item.partNumber + ' of ' + item.partsTotal + '.' : '';
+    const intro   = !options.repeat && item.partNumber === 1
+      ? 'Question ' + item.questionNumber + '. '
+      : '';
     const body    = item.partNumber === 1 || options.repeat
       ? speakableQuestion(item.q.question)
       : '';
+    const partTag = item.partsTotal > 1 ? ' Part ' + item.partNumber + ' of ' + item.partsTotal + '.' : '';
 
-    return say(intro + body + partTag).then(beginListening);
+    say(intro + body + partTag).then(thenWait);
   }
 
-  function beginListening() {
-    if (phase === 'done') return;
+  /** Read the current part's answer, then move straight on to the next part or question. */
+  function readAnswer() {
+    const item = current();
+    if (!item) return;
+
+    shown.push(item.partsTotal > 1
+      ? 'Part ' + item.partNumber + ': ' + item.correct
+      : 'Answer: ' + item.correct);
+    revealed++;
+    renderShown();
+    setHeard('');
+
+    const lead = item.partsTotal > 1 ? 'Part ' + item.partNumber + '. The answer is. ' : 'The answer is. ';
+    say(lead + speakableAnswer(item.correct)).then(function (stillCurrent) {
+      if (!stillCurrent) return;
+      cursor++;
+      askCurrent();
+    });
+  }
+
+  /** Wait for the next command — by voice if there is a recogniser, otherwise on the buttons. */
+  function awaitCommand() {
+    if (phase === 'done' || phase === 'idle') return;
+    if (!engine) { setPhase('waiting'); return; }
+
     setPhase('listening');
-    nudged = false;
 
     engine.start({
       onResult: onResult,
@@ -5991,116 +6052,75 @@ const AudioPractice = (function () {
   }
 
   /**
-   * A commuter needs thinking time, so silence never advances the session
-   * on its own — it just offers the options once, then keeps listening.
+   * Thinking time is the point, so silence never advances the session on
+   * its own — it reminds you of the command once per part, then keeps
+   * waiting. Talking (reciting the answer to yourself) counts as not silent.
    */
   function armSilenceTimer() {
     clearTimeout(silenceTimer);
+    if (nudged) return;
     silenceTimer = setTimeout(function () {
       if (phase !== 'listening' || nudged) return;
       nudged = true;
-      say('Still listening. Say: what is the answer, next question, or repeat question.')
-        .then(function () { if (phase === 'speaking') beginListening(); });
+      say('Say answer when you are ready.').then(thenWait);
     }, 20000);
   }
 
+  /**
+   * Only commands do anything. Whatever else is heard — you saying the
+   * answer to yourself, say — is shown and ignored; the answer is read out
+   * when you say "answer".
+   */
   function onResult(alternatives, isFinal) {
     if (phase !== 'listening') return; // ignore anything caught mid-sentence
     const best = alternatives[0] || '';
     setHeard(best);
+    armSilenceTimer();
     if (!isFinal) return;
 
-    clearTimeout(silenceTimer);
-
     // A command is often the recogniser's second guess, so every
-    // alternative gets a look before the utterance is graded as an answer.
+    // alternative gets a look.
     for (let i = 0; i < alternatives.length; i++) {
       const cmd = matchCommand(alternatives[i]);
       if (cmd) return runCommand(cmd);
     }
-
-    judge(best);
   }
 
   function runCommand(id) {
-    const item = current();
+    if (!running || phase === 'done' || phase === 'idle') return;
+    nudged = false;
 
-    if (id === 'repeat') {
-      askCurrent({ repeat: true });
-      return;
-    }
+    if (id === 'answer') { readAnswer(); return; }
+
+    if (id === 'repeat') { askCurrent({ repeat: true }); return; }
 
     if (id === 'next') {
-      // Skipped, not failed — an unanswered part scores nothing either way.
-      cursor++;
-      askCurrent();
-      return;
-    }
-
-    if (id === 'stop') {
-      finish();
-      return;
-    }
-
-    if (id === 'answer') {
-      // Reads the answer without marking the part, so the question can
-      // still be attempted afterwards.
+      // Skip the rest of this question, however many parts are left.
+      const item = current();
       if (!item) return;
-      setVerdict('revealed', 'Answer: ' + item.correct);
-      say('The answer is. ' + speakableAnswer(item.correct))
-        .then(function () { if (phase === 'speaking') beginListening(); });
-    }
-  }
-
-  function judge(spoken) {
-    const item = current();
-    if (!item) return;
-
-    stopListening();
-    setPhase('judging');
-
-    const result = matchSpokenAnswer(spoken, item.correct);
-    tally[result.verdict]++;
-
-    let spokenBack;
-    if (result.verdict === 'correct') {
-      setVerdict('correct', 'Correct');
-      spokenBack = 'Correct.';
-    } else if (result.verdict === 'close') {
-      setVerdict('close', 'Close — answer: ' + item.correct);
-      spokenBack = 'Close. The answer is. ' + speakableAnswer(item.correct);
-    } else {
-      setVerdict('wrong', 'Incorrect — answer: ' + item.correct);
-      spokenBack = 'Incorrect. The answer is. ' + speakableAnswer(item.correct);
-    }
-
-    say(spokenBack).then(function () {
-      if (phase !== 'speaking') return;
-      cursor++;
+      while (current() && current().questionNumber === item.questionNumber) cursor++;
       askCurrent();
-    });
+      return;
+    }
+
+    if (id === 'stop') finish(false);
   }
 
-  function finish() {
+  function finish(reachedEnd) {
     stopListening();
     Speaker.cancel();
+    speechToken++;
     setPhase('done');
     releaseWakeLock();
 
-    const graded = tally.correct + tally.close + tally.wrong;
     $('audio-session').classList.add('hidden');
     $('audio-summary').classList.remove('hidden');
-    $('audio-summary-score').textContent = tally.correct + ' / ' + graded;
-    $('audio-summary-detail').textContent = graded === 0
-      ? 'No answers graded this session.'
-      : tally.correct + ' correct · ' + tally.close + ' close · ' + tally.wrong + ' incorrect';
+    $('audio-summary-score').textContent = revealed + ' / ' + queue.length;
+    $('audio-summary-detail').textContent = queue.length > questionCount()
+      ? 'answers read out (each part counts as one)'
+      : 'answers read out';
 
-    // Deliberately not written to attempt history: these are speech-graded
-    // results, and letting them feed Weak Areas would change what the
-    // typed Practice mode shows you.
-    if (graded > 0) {
-      Speaker.speak('Session finished. ' + tally.correct + ' out of ' + graded + ' correct.');
-    }
+    if (reachedEnd) Speaker.speak('That was the last question. Session finished.');
   }
 
   /* — screen wake lock, so a pocketed phone keeps recognising — */
@@ -6120,20 +6140,30 @@ const AudioPractice = (function () {
 
   /* — errors — */
 
+  /** Lose the recogniser but keep the session: the buttons still drive it. */
+  function dropToButtons(msg) {
+    setNotice(msg, null);
+    clearTimeout(silenceTimer);
+    if (engine) {
+      engine.stop();
+      if (engine.release) engine.release();
+    }
+    engine = null;
+    showEngineNote(false, true);
+    if (phase === 'listening') setPhase('waiting');
+  }
+
   function onEngineError(code) {
     if (code === 'not-allowed' || code === 'service-not-allowed') {
-      setNotice('Microphone access was denied. Allow it in your browser’s site settings, then start audio practice again.', 'error');
-      setPhase('idle');
-      stopListening();
-      return;
-    }
-    if (code === 'network') {
-      setNotice('Speech recognition needs a connection on this device — the browser’s recogniser is not on-device here.', 'error');
+      dropToButtons('Microphone access was denied — use the buttons below instead.');
       return;
     }
     if (code === 'unsupported') {
-      setNotice('This browser has no speech recognition. Try Chrome.', 'error');
-      setPhase('idle');
+      dropToButtons('Voice commands aren’t supported in this browser — use the buttons below.');
+      return;
+    }
+    if (code === 'network') {
+      setNotice('Speech recognition needs a connection on this device — the browser’s recogniser is not on-device here. The buttons below still work.', 'error');
       return;
     }
     setNotice('Speech recognition error: ' + code, 'error');
@@ -6158,6 +6188,12 @@ const AudioPractice = (function () {
     return items;
   }
 
+  /**
+   * Voice commands are the hands-free way to drive this, not a requirement:
+   * iOS has no speech recognition in any browser, and a denied microphone
+   * shouldn't cost you the session. Either way it carries on with the
+   * on-screen buttons.
+   */
   function start() {
     const exam = getActiveExam();
     if (!exam) return;
@@ -6167,36 +6203,62 @@ const AudioPractice = (function () {
       return;
     }
 
-    engine = createSttEngine();
-    if (!engine.isSupported()) {
-      showConfirm('This browser has no speech recognition. Audio practice needs Chrome (desktop or Android).', 'OK', function () {});
-      return;
-    }
-
-    queue  = buildQueue();
+    queue = buildQueue();
     if (!queue.length) {
       showInlineNotice('Nothing to practise — pick some questions first.');
       return;
     }
 
-    cursor = 0;
-    tally  = { correct: 0, close: 0, wrong: 0 };
+    cursor   = 0;
+    revealed = 0;
+    shown    = [];
+    running  = false;
+    nudged   = false;
+    engine   = null;
+    const mine = ++session;
 
     openView();
     setNotice('', null);
+    setHeard('');
+    $('audio-engine-note').textContent = '';
+    $('btn-audio-offline').classList.add('hidden');
+    render();
     setPhase('speaking');
+    requestWakeLock();
+
+    function begin() {
+      if (mine !== session) return; // exited while the microphone prompt was up
+      running = true;
+      const n   = questionCount();
+      const how = engine ? ' Say answer when you are ready to hear it.' : '';
+      say('Audio practice. ' + n + (n === 1 ? ' question.' : ' questions.') + how)
+        .then(function (stillCurrent) { if (stillCurrent) askCurrent(); });
+    }
+
+    const sttEngine = createSttEngine();
+    if (!sttEngine.isSupported()) {
+      showEngineNote(false, true);
+      begin();
+      return;
+    }
 
     ensureMicPermission().then(function (granted) {
+      if (mine !== session) return;
       if (!granted) {
-        onEngineError('not-allowed');
+        setNotice('Microphone access was denied — use the buttons below instead.', null);
+        showEngineNote(false, true);
+        begin();
         return;
       }
-      requestWakeLock();
+      engine = sttEngine;
       return prepareEngine().then(function (info) {
-        showEngineNote(info.offline);
-        return say('Audio practice. ' + queue.length + ' to answer. Say next question, repeat question, or what is the answer, at any time.')
-          .then(askCurrent);
-      });
+        showEngineNote(info.offline, false);
+      }, function () {
+        if (engine && engine.release) engine.release();
+        engine = null;
+        setNotice('Voice commands could not start — use the buttons below instead.', null);
+        showEngineNote(false, true);
+      }).then(begin);
     });
   }
 
@@ -6234,10 +6296,12 @@ const AudioPractice = (function () {
    * Say which recogniser is running, and — when it is the online one —
    * offer the download that makes the next session work in a tunnel.
    */
-  function showEngineNote(offline) {
-    $('audio-engine-note').textContent = offline
-      ? 'On-device recognition · works offline'
-      : 'Browser recognition · needs a connection on this device';
+  function showEngineNote(offline, noVoice) {
+    $('audio-engine-note').textContent = noVoice
+      ? 'No voice commands here · use the buttons'
+      : offline
+        ? 'On-device recognition · works offline'
+        : 'Browser recognition · needs a connection on this device';
 
     const setup = $('btn-audio-offline');
     const canOffline = !offline && new VoskEngine().isSupported();
@@ -6295,6 +6359,9 @@ const AudioPractice = (function () {
     stopListening();
     Speaker.cancel();
     releaseWakeLock();
+    session++;
+    speechToken++;
+    running = false;
     phase = 'idle';
     // The offline engine holds a microphone, an audio graph and a worker
     // with the model in it — dropping the reference would leak all three.
