@@ -112,6 +112,8 @@ command('move on',                  'next');
 command('repeat the question',      'repeat');
 command('say that again',           'repeat');
 command('once more',                'repeat');
+command('redo question',            'repeat');
+command('start again',              'repeat');
 command('stop',                     'stop');
 command('end session',              'stop');
 command('im done',                  'stop');

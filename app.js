@@ -5044,6 +5044,8 @@ const VOICE_COMMANDS = [
   { id: 'repeat', phrases: [
     'repeat question', 'repeat the question', 'repeat', 'say again',
     'say that again', 'again', 'come again', 'read it again', 'once more',
+    'redo', 'redo question', 'redo the question', 'do it again',
+    'start again', 'go again',
   ] },
   { id: 'stop', phrases: [
     'stop', 'stop practice', 'stop practising', 'end session', 'end practice',
@@ -5807,12 +5809,13 @@ const AudioPractice = (function () {
   let phase     = 'idle'; // idle | speaking | listening | waiting | done
   let running   = false;  // true once the session has started reading questions
   let session   = 0;      // bumped on start/exit, so a stale permission prompt can't revive one
-  let revealed  = 0;      // answers read out this session
+  let revealed  = {};     // queue index -> true once its answer has been read out (redos count once)
   let shown     = [];     // answers read out for the current question, for the screen
   let wakeLock  = null;
   let nudged    = false;
   let silenceTimer = null;
   let speechToken  = 0;   // bumped by every say(), so a superseded one never carries on
+  let allAnswered  = false; // every part of the current question has been read out
 
   /* — view helpers — */
 
@@ -5825,8 +5828,8 @@ const AudioPractice = (function () {
     orb.className = 'audio-orb audio-orb-' + next;
     label.textContent =
       next === 'speaking'  ? 'Speaking…'  :
-      next === 'listening' ? 'Listening… say “answer”' :
-      next === 'waiting'   ? 'Tap Answer when you’re ready' :
+      next === 'listening' ? (allAnswered ? 'Listening… say “repeat” or “next”' : 'Listening… say “answer”') :
+      next === 'waiting'   ? (allAnswered ? 'Tap Repeat question or Next question' : 'Tap Answer when you’re ready') :
       next === 'done'      ? 'Finished'   : '';
   }
 
@@ -5869,15 +5872,22 @@ const AudioPractice = (function () {
 
     const part = $('audio-part');
     if (item.partsTotal > 1) {
-      part.textContent = 'Part ' + item.partNumber + ' of ' + item.partsTotal;
+      part.textContent = allAnswered
+        ? 'All ' + item.partsTotal + ' parts answered'
+        : 'Part ' + item.partNumber + ' of ' + item.partsTotal;
       part.classList.remove('hidden');
     } else {
       part.classList.add('hidden');
     }
 
-    $('btn-audio-reveal').textContent = item.partsTotal > 1
+    const answerBtn = $('btn-audio-reveal');
+    // Nothing left to answer — Repeat question and Next question are the way on.
+    answerBtn.classList.toggle('hidden', allAnswered);
+    answerBtn.textContent = item.partsTotal > 1 && !allAnswered
       ? 'Answer part ' + item.partNumber
       : 'Answer';
+    // Before the answers it re-reads the question; after them it starts it over.
+    $('btn-audio-repeat').textContent = allAnswered ? '↻ Repeat question' : '↻ Repeat';
     renderShown();
   }
 
@@ -5912,6 +5922,7 @@ const AudioPractice = (function () {
     if (!item) return finish(true);
 
     const options = opts || {};
+    allAnswered = false;
     if (item.partNumber === 1 && !options.repeat) shown = [];
     render();
     setHeard('');
@@ -5927,24 +5938,41 @@ const AudioPractice = (function () {
     say(intro + body + partTag).then(thenWait);
   }
 
-  /** Read the current part's answer, then move straight on to the next part or question. */
+  /**
+   * Read the current part's answer. If more parts are left, move straight
+   * on to the next one; after the last part, stay on the question so it
+   * can be repeated before moving on.
+   */
   function readAnswer() {
     const item = current();
-    if (!item) return;
+    if (!item || allAnswered) return;
 
     shown.push(item.partsTotal > 1
       ? 'Part ' + item.partNumber + ': ' + item.correct
       : 'Answer: ' + item.correct);
-    revealed++;
-    renderShown();
+    revealed[cursor] = true;
     setHeard('');
 
-    const lead = item.partsTotal > 1 ? 'Part ' + item.partNumber + '. The answer is. ' : 'The answer is. ';
-    say(lead + speakableAnswer(item.correct)).then(function (stillCurrent) {
+    const lead   = item.partsTotal > 1 ? 'Part ' + item.partNumber + '. The answer is. ' : 'The answer is. ';
+    const isLast = item.partNumber === item.partsTotal;
+    if (isLast) allAnswered = true;
+    render();
+
+    const cue = isLast && engine ? ' Repeat, or next question?' : '';
+    say(lead + speakableAnswer(item.correct) + cue).then(function (stillCurrent) {
       if (!stillCurrent) return;
+      if (isLast) { awaitCommand(); return; }
       cursor++;
       askCurrent();
     });
+  }
+
+  /** Go back to part 1 of the current question and go through it again. */
+  function redoQuestion() {
+    const item = current();
+    if (!item) return;
+    cursor -= item.partNumber - 1;
+    askCurrent();
   }
 
   /** Wait for the next command — by voice if there is a recogniser, otherwise on the buttons. */
@@ -5978,7 +6006,9 @@ const AudioPractice = (function () {
     silenceTimer = setTimeout(function () {
       if (phase !== 'listening' || nudged) return;
       nudged = true;
-      say('Say answer when you are ready.').then(thenWait);
+      say(allAnswered
+        ? 'Say repeat to go over this question again, or next question to move on.'
+        : 'Say answer when you are ready.').then(thenWait);
     }, 20000);
   }
 
@@ -6008,7 +6038,11 @@ const AudioPractice = (function () {
 
     if (id === 'answer') { readAnswer(); return; }
 
-    if (id === 'repeat') { askCurrent({ repeat: true }); return; }
+    if (id === 'repeat') {
+      if (allAnswered) redoQuestion();
+      else askCurrent({ repeat: true });
+      return;
+    }
 
     if (id === 'next') {
       // Skip the rest of this question, however many parts are left.
@@ -6031,7 +6065,7 @@ const AudioPractice = (function () {
 
     $('audio-session').classList.add('hidden');
     $('audio-summary').classList.remove('hidden');
-    $('audio-summary-score').textContent = revealed + ' / ' + queue.length;
+    $('audio-summary-score').textContent = Object.keys(revealed).length + ' / ' + queue.length;
     $('audio-summary-detail').textContent = queue.length > questionCount()
       ? 'answers read out (each part counts as one)'
       : 'answers read out';
@@ -6126,7 +6160,8 @@ const AudioPractice = (function () {
     }
 
     cursor   = 0;
-    revealed = 0;
+    allAnswered = false;
+    revealed = {};
     shown    = [];
     running  = false;
     nudged   = false;

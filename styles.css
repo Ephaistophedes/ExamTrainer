@@ -3313,7 +3313,8 @@ main {
   .btn-audio { width: 100%; min-height: 44px; }
 
   .audio-question { font-size: 1.1rem; }
-  .audio-controls .btn { flex: 1; min-width: 6.5rem; min-height: 44px; }
+  /* Labels may wrap to two lines ("Repeat question") rather than spill out. */
+  .audio-controls .btn { flex: 1; min-width: 6.5rem; min-height: 44px; white-space: normal; line-height: 1.25; }
   /* Stop keeps its natural size instead of stretching across a wrapped row. */
   .audio-controls .btn-danger-ghost { flex: 0 0 auto; min-width: 6.5rem; margin-top: 0.5rem; }
 }
