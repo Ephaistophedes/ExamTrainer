@@ -5812,8 +5812,6 @@ const AudioPractice = (function () {
   let revealed  = {};     // queue index -> true once its answer has been read out (redos count once)
   let shown     = [];     // answers read out for the current question, for the screen
   let wakeLock  = null;
-  let nudged    = false;
-  let silenceTimer = null;
   let speechToken  = 0;   // bumped by every say(), so a superseded one never carries on
   let allAnswered  = false; // every part of the current question has been read out
 
@@ -5986,30 +5984,10 @@ const AudioPractice = (function () {
       onResult: onResult,
       onError:  onEngineError,
     });
-
-    armSilenceTimer();
   }
 
   function stopListening() {
-    clearTimeout(silenceTimer);
     if (engine) engine.stop();
-  }
-
-  /**
-   * Thinking time is the point, so silence never advances the session on
-   * its own — it reminds you of the command once per part, then keeps
-   * waiting. Talking (reciting the answer to yourself) counts as not silent.
-   */
-  function armSilenceTimer() {
-    clearTimeout(silenceTimer);
-    if (nudged) return;
-    silenceTimer = setTimeout(function () {
-      if (phase !== 'listening' || nudged) return;
-      nudged = true;
-      say(allAnswered
-        ? 'Say repeat to go over this question again, or next question to move on.'
-        : 'Say answer when you are ready.').then(thenWait);
-    }, 20000);
   }
 
   /**
@@ -6021,7 +5999,6 @@ const AudioPractice = (function () {
     if (phase !== 'listening') return; // ignore anything caught mid-sentence
     const best = alternatives[0] || '';
     setHeard(best);
-    armSilenceTimer();
     if (!isFinal) return;
 
     // A command is often the recogniser's second guess, so every
@@ -6034,7 +6011,6 @@ const AudioPractice = (function () {
 
   function runCommand(id) {
     if (!running || phase === 'done' || phase === 'idle') return;
-    nudged = false;
 
     if (id === 'answer') { readAnswer(); return; }
 
@@ -6093,7 +6069,6 @@ const AudioPractice = (function () {
   /** Lose the recogniser but keep the session: the buttons still drive it. */
   function dropToButtons(msg) {
     setNotice(msg, null);
-    clearTimeout(silenceTimer);
     if (engine) {
       engine.stop();
       if (engine.release) engine.release();
@@ -6164,7 +6139,6 @@ const AudioPractice = (function () {
     revealed = {};
     shown    = [];
     running  = false;
-    nudged   = false;
     engine   = null;
     const mine = ++session;
 
