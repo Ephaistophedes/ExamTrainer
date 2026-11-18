@@ -5956,8 +5956,7 @@ const AudioPractice = (function () {
     if (isLast) allAnswered = true;
     render();
 
-    const cue = isLast && engine ? ' Repeat, or next question?' : '';
-    say(lead + speakableAnswer(item.correct) + cue).then(function (stillCurrent) {
+    say(lead + speakableAnswer(item.correct)).then(function (stillCurrent) {
       if (!stillCurrent) return;
       if (isLast) { awaitCommand(); return; }
       cursor++;
@@ -6155,8 +6154,7 @@ const AudioPractice = (function () {
       if (mine !== session) return; // exited while the microphone prompt was up
       running = true;
       const n   = questionCount();
-      const how = engine ? ' Say answer when you are ready to hear it.' : '';
-      say('Audio practice. ' + n + (n === 1 ? ' question.' : ' questions.') + how)
+      say('Audio practice. ' + n + (n === 1 ? ' question.' : ' questions.'))
         .then(function (stillCurrent) { if (stillCurrent) askCurrent(); });
     }
 
