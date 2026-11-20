@@ -1179,6 +1179,7 @@ function openEditor(examId) {
 
   BackStack.push('modal-editor', closeEditor);
   $('editor-modal').classList.remove('hidden');
+  fitEditorFields($('editor-questions'));
   $('editor-name').focus();
 }
 
@@ -1187,6 +1188,54 @@ function closeEditor() {
   $('editor-modal').classList.add('hidden');
   editingExamId = null;
 }
+
+/* ─── Editor text boxes that grow to fit ─────────────── */
+
+/*
+ * Questions, answers and blanks sentences are textareas that grow to show
+ * everything typed in them, so a long question wraps onto more lines instead
+ * of running off the side of a one-line box. Measuring only works while the
+ * editor is on screen, which is why opening it fits them all again.
+ */
+function fitTextarea(ta) {
+  if (!ta.offsetWidth) return;  // hidden: nothing to measure yet
+  // Collapsing the box for a moment can shorten the page and drag the
+  // modal's scroll position up with it; put it back afterwards.
+  const scroller = ta.closest('.modal-body');
+  const top      = scroller ? scroller.scrollTop : 0;
+  ta.style.height = 'auto';
+  ta.style.height = (ta.scrollHeight + ta.offsetHeight - ta.clientHeight) + 'px';
+  if (scroller) scroller.scrollTop = top;
+}
+
+function fitEditorFields(root) {
+  root.querySelectorAll('textarea.editor-grow').forEach(fitTextarea);
+}
+
+$('editor-questions').addEventListener('input', function (e) {
+  const ta = e.target;
+  if (!ta.classList || !ta.classList.contains('editor-grow')) return;
+  // Questions and answers stay one line of text, as they were when they were
+  // plain text boxes — a pasted line break becomes a space.
+  if (ta.classList.contains('editor-one-line') && /[\r\n]/.test(ta.value)) {
+    const at = ta.selectionStart;
+    ta.value = ta.value.replace(/\r\n|[\r\n]/g, ' ');
+    ta.setSelectionRange(at, at);
+  }
+  fitTextarea(ta);
+});
+
+$('editor-questions').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter' && e.target.classList &&
+      e.target.classList.contains('editor-one-line')) e.preventDefault();
+});
+
+// A narrower or wider window rewraps the text, so the heights change too.
+window.addEventListener('resize', function () {
+  if (!$('editor-modal').classList.contains('hidden')) {
+    fitEditorFields($('editor-questions'));
+  }
+});
 
 /* ─── Editor question/part building ────────────────── */
 
@@ -1224,10 +1273,9 @@ function createEditorRow(q, idx) {
       '<button class="btn btn-ghost btn-remove-q" type="button" title="Remove question">✕ Remove</button>' +
     '</div>' +
     '<div class="form-group" style="margin-bottom:0.625rem;">' +
-      '<input type="text" class="input editor-q-text"' +
+      '<textarea class="input editor-q-text editor-grow editor-one-line" rows="1"' +
         ' placeholder="Enter question text…"' +
-        ' value="' + esc(q.question) + '"' +
-        ' autocomplete="off">' +
+        ' autocomplete="off">' + esc(q.question) + '</textarea>' +
     '</div>' +
     '<div class="editor-q-parts">' + partsHtml + '</div>' +
     '<button class="btn-add-part" type="button">+ Add Part</button>';
@@ -1261,10 +1309,9 @@ function buildPartRowHtml(value, partIdx, totalParts) {
   return (
     '<div class="editor-part-row">' +
       '<span class="editor-part-label">Answer ' + (partIdx + 1) + '</span>' +
-      '<input type="text" class="input editor-part-input"' +
+      '<textarea class="input editor-part-input editor-grow editor-one-line" rows="1"' +
         ' placeholder="Correct answer…"' +
-        ' value="' + esc(value) + '"' +
-        ' autocomplete="off">' +
+        ' autocomplete="off">' + esc(value) + '</textarea>' +
       '<button class="btn-remove-part" type="button" title="Remove part" ' + showRemove + '>✕</button>' +
     '</div>'
   );
@@ -1277,9 +1324,9 @@ function appendPartRow(row) {
   partRow.className = 'editor-part-row';
   partRow.innerHTML =
     '<span class="editor-part-label">Answer ' + (count + 1) + '</span>' +
-    '<input type="text" class="input editor-part-input"' +
+    '<textarea class="input editor-part-input editor-grow editor-one-line" rows="1"' +
       ' placeholder="Correct answer…"' +
-      ' autocomplete="off">' +
+      ' autocomplete="off"></textarea>' +
     '<button class="btn-remove-part" type="button" title="Remove part">✕</button>';
 
   partsContainer.appendChild(partRow);
@@ -1387,7 +1434,7 @@ function createFillBlankEditorRow(q, idx, model) {
       '<button class="btn btn-ghost btn-remove-q" type="button" title="Remove question">✕ Remove</button>' +
     '</div>' +
     '<div class="form-group" style="margin-bottom:0.5rem;">' +
-      '<textarea class="input fib-sentence-input" rows="3"' +
+      '<textarea class="input fib-sentence-input editor-grow" rows="3"' +
         ' placeholder="Type the full sentence here…"' +
         ' autocomplete="off">' + esc(parsed.sentence) + '</textarea>' +
     '</div>' +

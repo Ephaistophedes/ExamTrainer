@@ -1671,8 +1671,14 @@ main {
 
 .editor-part-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
+}
+
+/* The label and ✕ sit level with the first line of a long, wrapped answer. */
+.editor-part-row .editor-part-label,
+.editor-part-row .btn-remove-part {
+  margin-top: 0.55rem;
 }
 
 .editor-part-label {
@@ -2507,8 +2513,16 @@ main {
 /* Editor: fill-blank sentence textarea */
 .fib-sentence-input {
   width: 100%;
-  resize: vertical;
   font-family: var(--font-body);
+}
+
+/* Editor: question / answer / sentence boxes grow to fit their text (app.js
+   fitTextarea), so there's nothing to drag and nothing to scroll. */
+.editor-grow {
+  display: block;
+  resize: none;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 /* Editor: click-to-blank instruction */
